@@ -1,0 +1,27 @@
+app = "uk-biz-intel-mcp"
+primary_region = "lhr"  # London — closest to CH/Gazette APIs
+
+[build]
+
+[env]
+  PORT = "8080"
+  # Set secrets via: fly secrets set CH_API_KEY=xxx CHARITY_API_KEY=xxx MCP_SERVER_KEY=xxx
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
