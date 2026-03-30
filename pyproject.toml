@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "uk-biz-intel-mcp"
+name = "uk-due-diligence-mcp"
 version = "1.0.0"
 description = "UK Business Intelligence MCP server — unified due diligence across five public registries"
 readme = "README.md"
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-uk-biz-intel-mcp = "server:main"
+uk-due-diligence-mcp = "server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]

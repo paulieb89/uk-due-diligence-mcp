@@ -1,4 +1,4 @@
-app = "uk-biz-intel-mcp"
+app = "uk-due-diligence-mcp"
 primary_region = "lhr"  # London — closest to CH/Gazette APIs
 
 [build]
@@ -15,12 +15,10 @@ primary_region = "lhr"  # London — closest to CH/Gazette APIs
   min_machines_running = 0
   processes = ["app"]
 
-  [[http_service.checks]]
-    grace_period = "10s"
-    interval = "30s"
-    method = "GET"
-    path = "/health"
-    timeout = "5s"
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 50
+    soft_limit = 25
 
 [[vm]]
   size = "shared-cpu-1x"

@@ -1,17 +1,18 @@
 """
-tools/charity.py — Charity Commission API tools (2 tools).
+Charity Commission API tools (2 tools).
 
 Covers:
-  - charity_search   → search by name/keyword
-  - charity_profile  → full charity record with trustees, finances, filing history
+  - charity_search   -> search by name/keyword
+  - charity_profile  -> full charity record with trustees, finances, filing history
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
+from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
 from http_client import (
@@ -19,24 +20,24 @@ from http_client import (
     charity_client,
     format_api_error,
 )
-from inputs import (
-    CharityProfileInput,
-    CharitySearchInput,
-    ResponseFormat,
-)
 
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
+_STATUS_LABELS = {"R": "Registered", "RM": "Removed"}
+
+
 def _format_charity_summary(item: dict[str, Any]) -> str:
-    reg_num = item.get("registrationNumber", item.get("regno", "—"))
-    status = item.get("registrationStatus", "—")
+    reg_num = item.get("reg_charity_number", item.get("registrationNumber", item.get("regno", "—")))
+    raw_status = item.get("reg_status", item.get("registrationStatus", "—"))
+    status = _STATUS_LABELS.get(raw_status, raw_status)
+    name = item.get("charity_name", item.get("charityName", item.get("name", "Unknown")))
     activities = item.get("charityActivities", item.get("activities", ""))
     activities_short = (activities[:120] + "…") if len(activities) > 120 else activities
     return (
-        f"**{item.get('charityName', item.get('name', 'Unknown'))}**\n"
+        f"**{name}**\n"
         f"  Charity No: {reg_num} | Status: {status}\n"
         f"  Activities: {activities_short or '—'}\n"
     )
@@ -57,7 +58,7 @@ def _format_finances(item: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool registration helper
+# Tool registration
 # ---------------------------------------------------------------------------
 
 def register_tools(mcp: FastMCP) -> None:
@@ -75,68 +76,50 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def charity_search(params: CharitySearchInput) -> str:
+    async def charity_search(
+        query: Annotated[str, Field(description="Charity name or keyword to search for", min_length=2, max_length=200)],
+        registration_status: Annotated[str | None, Field(description="Filter by registration status: 'Registered' or 'Removed'. Default: Registered.")] = "Registered",
+        page_size: Annotated[int, Field(description="Number of results per page (max 100)", ge=1, le=100)] = 20,
+        page_num: Annotated[int, Field(description="Page number (1-indexed)", ge=1)] = 1,
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Search the Charity Commission register of England and Wales by name or keyword.
 
         Returns matching charities with registration number, status, and
         activities summary. Use charity_profile for full details once you
         have the charity number.
-
-        Args:
-            params (CharitySearchInput): Validated input containing:
-                - query (str): Charity name or keyword
-                - registration_status (Optional[CharityRegistrationStatus]): Status filter
-                - page_size (int): Results per page (default 20, max 100)
-                - page_num (int): Page number (default 1)
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Paginated list of matching charities.
         """
-        payload = {
-            "keyword": params.query,
-            "pageSize": params.page_size,
-            "pageNum": params.page_num,
-        }
-        if params.registration_status:
-            payload["registrationStatus"] = params.registration_status.value
-
         try:
             async with charity_client() as client:
                 resp = await _request_with_retry(
-                    client, "POST",
-                    "/charities/search",
-                    json=payload,
+                    client, "GET",
+                    f"/searchCharityName/{query}",
                 )
                 data = resp.json()
         except Exception as exc:
             return format_api_error(exc, "charity_search")
 
-        # Charity Commission API returns different shapes; handle both
-        charities = (
-            data.get("charities")
-            or data.get("data")
-            or (data if isinstance(data, list) else [])
-        )
-        total = data.get("total", data.get("totalMatches", len(charities)))
+        # API returns a list of charity objects directly
+        charities = data if isinstance(data, list) else []
+        total = len(charities)
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(
                 {
                     "total": total,
-                    "page": params.page_num,
-                    "page_size": params.page_size,
+                    "page": page_num,
+                    "page_size": page_size,
                     "charities": charities,
                 },
                 indent=2,
             )
 
         if not charities:
-            return f"No charities found matching **{params.query}**."
+            return f"No charities found matching **{query}**."
 
         lines = [
-            f"## Charity Commission Search: '{params.query}'\n",
-            f"**{total:,} total results** — page {params.page_num}\n",
+            f"## Charity Commission Search: '{query}'\n",
+            f"**{total:,} total results** — page {page_num}\n",
         ]
         for item in charities:
             lines.append(_format_charity_summary(item))
@@ -156,43 +139,44 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def charity_profile(params: CharityProfileInput) -> str:
+    async def charity_profile(
+        charity_number: Annotated[str, Field(description="Charity Commission registration number, e.g. '1234567'", min_length=6, max_length=12)],
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Retrieve the full Charity Commission profile for a registered charity.
 
         Returns trustees, income/expenditure, filing history, governing document
         type, area of operation, and beneficiary description. Useful for
         verifying charitable status and governance quality.
-
-        Args:
-            params (CharityProfileInput): Validated input containing:
-                - charity_number (str): Charity Commission registration number
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Full charity profile including finances and governance details.
         """
         try:
             async with charity_client() as client:
+                # allcharitydetails/{RegNumber}/{suffix} — suffix 0 = main charity
+                suffix = "0"
+                if "-" in charity_number:
+                    parts = charity_number.split("-", 1)
+                    charity_number = parts[0]
+                    suffix = parts[1]
                 resp = await _request_with_retry(
                     client, "GET",
-                    f"/charities/{params.charity_number}",
+                    f"/allcharitydetails/{charity_number}/{suffix}",
                 )
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return (
-                    f"Charity number **{params.charity_number}** not found. "
+                    f"Charity number **{charity_number}** not found. "
                     "Check the number or use charity_search to locate the charity first."
                 )
             return format_api_error(exc, "charity_profile")
         except Exception as exc:
             return format_api_error(exc, "charity_profile")
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(data, indent=2)
 
         name = data.get("charityName", data.get("name", "Unknown"))
-        reg_num = data.get("registrationNumber", data.get("regno", params.charity_number))
+        reg_num = data.get("registrationNumber", data.get("regno", charity_number))
         status = data.get("registrationStatus", "—")
         obj = data.get("charityActivities", data.get("objects", "—"))
         doc_type = data.get("governingDocumentDescription", "—")

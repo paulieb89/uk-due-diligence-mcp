@@ -1,5 +1,5 @@
 """
-tools/land_registry.py — HMLR title search tool (1 tool).
+HMLR Land Registry title search tool (1 tool).
 
 Uses the Land Registry Linked Data API (api.landregistry.data.gov.uk).
 The PPI (Price Paid Index) endpoint is queried with SPARQL via the
@@ -17,9 +17,10 @@ Land Register of Scotland and Land & Property Services NI are separate.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote
 
+from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
 from http_client import (
@@ -27,7 +28,6 @@ from http_client import (
     hmlr_client,
     format_api_error,
 )
-from inputs import LandTitleSearchInput, ResponseFormat
 
 # ---------------------------------------------------------------------------
 # SPARQL query helper for PPI (Price Paid Index) search
@@ -65,7 +65,7 @@ TITLE_SEARCH_URL = "https://api.landregistry.data.gov.uk/data/title"
 
 
 def _is_postcode(text: str) -> bool:
-    """Naive UK postcode detector — just checks for a space + 3-char suffix."""
+    """Naive UK postcode detector -- just checks for a space + 3-char suffix."""
     parts = text.strip().upper().split()
     return len(parts) >= 2 and len(parts[-1]) in (3,)
 
@@ -106,27 +106,18 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def land_title_search(params: LandTitleSearchInput) -> str:
+    async def land_title_search(
+        address_or_postcode: Annotated[str, Field(description="UK property address or postcode. Postcode is most reliable: e.g. 'NG1 1AB'. Full address also accepted.", min_length=4, max_length=200)],
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Search HM Land Registry for property ownership data by address or postcode.
 
         Returns registered proprietor name, title class (absolute/qualified/possessory),
         tenure (freehold/leasehold), and recent price paid transactions.
-        Useful for identifying who actually owns a property or verifying that a
-        company's registered address matches its land ownership.
-
-        Covers England and Wales only. Scotland uses the Land Register of Scotland;
-        Northern Ireland uses Land & Property Services NI — neither is covered here.
-
-        Args:
-            params (LandTitleSearchInput): Validated input containing:
-                - address_or_postcode (str): UK property address or postcode
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Property ownership details and recent price paid transactions.
+        Covers England and Wales only.
         """
         # Extract or use postcode
-        text = params.address_or_postcode.strip().upper()
+        text = address_or_postcode.strip().upper()
         postcode = _extract_postcode(text)
 
         if not postcode:
@@ -164,7 +155,7 @@ def register_tools(mcp: FastMCP) -> None:
                     }
                 )
 
-            # 2. Title search (ownership) — attempt REST title endpoint
+            # 2. Title search (ownership) -- attempt REST title endpoint
             title_data: dict[str, Any] = {}
             try:
                 async with hmlr_client() as title_client:
@@ -174,13 +165,13 @@ def register_tools(mcp: FastMCP) -> None:
                     )
                     title_data = title_resp.json()
             except Exception:
-                # Title endpoint may fail — PPI data still valuable
+                # Title endpoint may fail -- PPI data still valuable
                 pass
 
         except Exception as exc:
             return format_api_error(exc, "land_title_search")
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(
                 {
                     "postcode": postcode,

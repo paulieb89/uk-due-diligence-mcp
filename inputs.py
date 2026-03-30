@@ -1,5 +1,5 @@
 """
-models/inputs.py — Pydantic v2 input models for all uk-biz-intel-mcp tools.
+models/inputs.py — Pydantic v2 input models for all uk-due-diligence-mcp tools.
 
 All models use:
   - ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra='forbid')

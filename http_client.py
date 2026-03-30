@@ -1,5 +1,5 @@
 """
-clients/http.py — Shared async HTTP client for uk-biz-intel-mcp.
+clients/http.py — Shared async HTTP client for uk-due-diligence-mcp.
 
 Provides a single httpx.AsyncClient instance per data source with:
 - Per-source base URL and auth header injection

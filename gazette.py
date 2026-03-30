@@ -1,23 +1,23 @@
 """
-tools/gazette.py — The Gazette linked-data API tool (1 tool).
+The Gazette linked-data API tool (1 tool).
 
 The Gazette's linked-data read API is unauthenticated and uses a REST+RDF pattern.
-Corporate insolvency notice codes span the 2440–2460 range:
+Corporate insolvency notice codes span the 2440-2460 range:
 
-  2441 — Winding-Up Petition
-  2442 — Dismissal of Winding-Up Petition
-  2443 — Winding-Up Order
-  2444 — Stay of Winding-Up Order
-  2445 — Appointment of Provisional Liquidator
-  2446 — Notice to Creditors
-  2447 — Notice to Contributories
-  2448 — Administration Order
-  2449 — Appointment of Administrative Receiver
-  2450 — Moratorium
-  2452 — Appointment of Liquidator
-  2455 — Notice of Voluntary Winding-Up Resolution
-  2456 — Creditors' Voluntary Liquidation
-  2460 — Striking-Off Notice
+  2441 -- Winding-Up Petition
+  2442 -- Dismissal of Winding-Up Petition
+  2443 -- Winding-Up Order
+  2444 -- Stay of Winding-Up Order
+  2445 -- Appointment of Provisional Liquidator
+  2446 -- Notice to Creditors
+  2447 -- Notice to Contributories
+  2448 -- Administration Order
+  2449 -- Appointment of Administrative Receiver
+  2450 -- Moratorium
+  2452 -- Appointment of Liquidator
+  2455 -- Notice of Voluntary Winding-Up Resolution
+  2456 -- Creditors' Voluntary Liquidation
+  2460 -- Striking-Off Notice
 
 The read API returns JSON-LD. We parse the @graph array.
 Query params: ?noticecode=XXXX&text=NAME&start-date=YYYY-MM-DD&end-date=YYYY-MM-DD
@@ -26,8 +26,9 @@ Query params: ?noticecode=XXXX&text=NAME&start-date=YYYY-MM-DD&end-date=YYYY-MM-
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
+from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
 from http_client import (
@@ -35,7 +36,6 @@ from http_client import (
     gazette_client,
     format_api_error,
 )
-from inputs import GazetteInsolvencyInput, GazetteNoticeType, ResponseFormat
 
 # ---------------------------------------------------------------------------
 # Notice code taxonomy
@@ -62,7 +62,7 @@ NOTICE_LABELS: dict[str, str] = {
     "2460": "Striking-Off Notice",
 }
 
-# Severity ordering — higher = more serious
+# Severity ordering -- higher = more serious
 SEVERITY: dict[str, int] = {
     "2443": 10,  # Winding-Up Order
     "2448": 9,   # Administration Order
@@ -136,31 +136,26 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def gazette_insolvency(params: GazetteInsolvencyInput) -> str:
+    async def gazette_insolvency(
+        entity_name: Annotated[str, Field(description="Company or individual name to search for in Gazette insolvency notices", min_length=2, max_length=200)],
+        notice_type: Annotated[str | None, Field(description="Filter by notice code (e.g. '2441' winding-up petition, '2443' winding-up order, '2448' administration order, '2460' striking-off). Omit to search all.")] = None,
+        start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
+        end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Search The Gazette's linked-data API for corporate insolvency notices.
 
-        Searches notice codes 2441–2460 (winding-up petitions, administration orders,
+        Searches notice codes 2441-2460 (winding-up petitions, administration orders,
         liquidation appointments, striking-off notices, etc.) by entity name.
-        Results are sorted by severity — winding-up orders and administration orders
+        Results are sorted by severity -- winding-up orders and administration orders
         appear first.
 
         The Gazette is the official UK public record. A notice here means the event
         has been formally published and is legally effective.
-
-        Args:
-            params (GazetteInsolvencyInput): Validated input containing:
-                - entity_name (str): Company or individual name to search
-                - notice_type (Optional[GazetteNoticeType]): Filter to specific notice code
-                - start_date (Optional[str]): ISO date filter (YYYY-MM-DD)
-                - end_date (Optional[str]): ISO date filter (YYYY-MM-DD)
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Severity-ranked list of insolvency notices with dates and content previews.
         """
         # Build target notice codes
-        if params.notice_type:
-            codes_to_search = [params.notice_type.value]
+        if notice_type:
+            codes_to_search = [notice_type]
         else:
             codes_to_search = ALL_CORPORATE_INSOLVENCY_CODES
 
@@ -171,14 +166,14 @@ def register_tools(mcp: FastMCP) -> None:
                 for code in codes_to_search:
                     qs: dict[str, Any] = {
                         "noticecode": code,
-                        "text": params.entity_name,
+                        "text": entity_name,
                         "results-page-size": 10,
                         "format": "application/json",
                     }
-                    if params.start_date:
-                        qs["start-date"] = params.start_date
-                    if params.end_date:
-                        qs["end-date"] = params.end_date
+                    if start_date:
+                        qs["start-date"] = start_date
+                    if end_date:
+                        qs["end-date"] = end_date
 
                     try:
                         resp = await _request_with_retry(client, "GET", "", params=qs)
@@ -188,7 +183,7 @@ def register_tools(mcp: FastMCP) -> None:
                         notices = _extract_notices(graph)
                         all_notices.extend(notices)
                     except Exception:
-                        # Per-code failures are non-fatal — continue scanning
+                        # Per-code failures are non-fatal -- continue scanning
                         continue
 
         except Exception as exc:
@@ -200,10 +195,10 @@ def register_tools(mcp: FastMCP) -> None:
             reverse=True,
         )
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(
                 {
-                    "entity_name": params.entity_name,
+                    "entity_name": entity_name,
                     "total_notices": len(all_notices),
                     "notices": all_notices,
                 },
@@ -213,19 +208,19 @@ def register_tools(mcp: FastMCP) -> None:
         if not all_notices:
             return (
                 f"✅ No corporate insolvency notices found in The Gazette for "
-                f"**{params.entity_name}**"
-                + (f" since {params.start_date}" if params.start_date else "")
+                f"**{entity_name}**"
+                + (f" since {start_date}" if start_date else "")
                 + "."
             )
 
         lines = [
-            f"## Gazette Insolvency Notices — '{params.entity_name}'\n",
+            f"## Gazette Insolvency Notices — '{entity_name}'\n",
             f"**{len(all_notices)} notice(s) found**",
         ]
-        if params.start_date:
-            lines[-1] += f" from {params.start_date}"
-        if params.end_date:
-            lines[-1] += f" to {params.end_date}"
+        if start_date:
+            lines[-1] += f" from {start_date}"
+        if end_date:
+            lines[-1] += f" to {end_date}"
         lines.append("")
 
         for i, notice in enumerate(all_notices, 1):

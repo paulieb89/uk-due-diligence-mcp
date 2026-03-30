@@ -1,19 +1,20 @@
 """
-tools/companies_house.py — Companies House API tools (4 tools).
+Companies House API tools (4 tools).
 
 Covers:
-  - company_search      → search by name/keyword
-  - company_profile     → full company record with filing signals
-  - company_officers    → directors with appointment count risk signal
-  - company_psc         → persons with significant control / beneficial ownership
+  - company_search      -> search by name/keyword
+  - company_profile     -> full company record with filing signals
+  - company_officers    -> directors with appointment count risk signal
+  - company_psc         -> persons with significant control / beneficial ownership
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
+from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
 from http_client import (
@@ -21,22 +22,19 @@ from http_client import (
     companies_house_client,
     format_api_error,
 )
-from inputs import (
-    CompanyOfficersInput,
-    CompanyProfileInput,
-    CompanyPSCInput,
-    CompanySearchInput,
-    ResponseFormat,
-)
 
 # ---------------------------------------------------------------------------
 # Risk thresholds
 # ---------------------------------------------------------------------------
-HIGH_APPOINTMENT_COUNT = 10  # Directors with ≥ this many active appointments flagged
+HIGH_APPOINTMENT_COUNT = 10  # Directors with >= this many active appointments flagged
 
 
 def _flag(condition: bool, label: str) -> str:
-    return f"🚩 {label}" if condition else f"✅ {label}"
+    return f"✅ {label}" if condition else f"🚩 {label}"
+
+
+def _normalise_company_number(v: str) -> str:
+    return v.zfill(8) if v.isdigit() else v.upper()
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +106,7 @@ def _format_psc_entry(p: dict[str, Any], idx: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool registration helper — injected by server.py
+# Tool registration
 # ---------------------------------------------------------------------------
 
 def register_tools(mcp: FastMCP) -> None:
@@ -126,34 +124,29 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def company_search(params: CompanySearchInput) -> str:
+    async def company_search(
+        query: Annotated[str, Field(description="Company name or keyword to search for", min_length=2, max_length=200)],
+        company_status: Annotated[str | None, Field(description="Filter by company status (e.g. 'active', 'dissolved'). Omit to search all.")] = None,
+        company_type: Annotated[str | None, Field(description="Filter by company type (e.g. 'ltd', 'llp'). Omit to search all.")] = None,
+        items_per_page: Annotated[int, Field(description="Number of results to return (max 100)", ge=1, le=100)] = 20,
+        start_index: Annotated[int, Field(description="Pagination offset", ge=0)] = 0,
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Search the Companies House register by company name or keyword.
 
         Returns a paginated list of matching companies with name, number,
         status, SIC codes, incorporation date, and registered address.
         Use company_profile for the full record once you have the company number.
-
-        Args:
-            params (CompanySearchInput): Validated input containing:
-                - query (str): Company name or keyword
-                - company_status (Optional[CompanyStatus]): Status filter
-                - company_type (Optional[CompanyType]): Type filter
-                - items_per_page (int): Results per page (default 20, max 100)
-                - start_index (int): Pagination offset
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Paginated list of matching companies in requested format.
         """
         qs: dict[str, Any] = {
-            "q": params.query,
-            "items_per_page": params.items_per_page,
-            "start_index": params.start_index,
+            "q": query,
+            "items_per_page": items_per_page,
+            "start_index": start_index,
         }
-        if params.company_status:
-            qs["status"] = params.company_status.value
-        if params.company_type:
-            qs["type"] = params.company_type.value
+        if company_status:
+            qs["status"] = company_status
+        if company_type:
+            qs["type"] = company_type
 
         try:
             async with companies_house_client() as client:
@@ -164,14 +157,14 @@ def register_tools(mcp: FastMCP) -> None:
 
         items = data.get("items", [])
         total = data.get("total_results", 0)
-        has_more = (params.start_index + params.items_per_page) < total
+        has_more = (start_index + items_per_page) < total
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(
                 {
                     "total_results": total,
                     "returned": len(items),
-                    "start_index": params.start_index,
+                    "start_index": start_index,
                     "has_more": has_more,
                     "items": items,
                 },
@@ -179,12 +172,12 @@ def register_tools(mcp: FastMCP) -> None:
             )
 
         if not items:
-            return f"No companies found matching **{params.query}**."
+            return f"No companies found matching **{query}**."
 
         lines = [
-            f"## Companies House Search: '{params.query}'\n",
-            f"**{total:,} total results** — showing {params.start_index + 1}–"
-            f"{params.start_index + len(items)} | "
+            f"## Companies House Search: '{query}'\n",
+            f"**{total:,} total results** — showing {start_index + 1}–"
+            f"{start_index + len(items)} | "
             f"{'More results available.' if has_more else 'End of results.'}\n",
         ]
         for item in items:
@@ -204,39 +197,36 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def company_profile(params: CompanyProfileInput) -> str:
+    async def company_profile(
+        company_number: Annotated[str, Field(description="Companies House company number, e.g. '12345678' or 'SC123456'", min_length=6, max_length=10)],
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Retrieve the full Companies House profile for a specific company number.
 
         Returns corporate status, registered address, SIC codes, accounts and
         confirmation statement status (overdue flags), charges count, and
         incorporation date. Accounts overdue and high charge counts are early
         distress signals.
-
-        Args:
-            params (CompanyProfileInput): Validated input containing:
-                - company_number (str): CH company number, e.g. '12345678'
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Full company profile with filing compliance signals.
         """
+        company_number = _normalise_company_number(company_number)
+
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(
-                    client, "GET", f"/company/{params.company_number}"
+                    client, "GET", f"/company/{company_number}"
                 )
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return (
-                    f"Company number **{params.company_number}** not found in "
+                    f"Company number **{company_number}** not found in "
                     "Companies House. Check the number and try again."
                 )
             return format_api_error(exc, "company_profile")
         except Exception as exc:
             return format_api_error(exc, "company_profile")
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(data, indent=2)
 
         # Signals
@@ -280,38 +270,34 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def company_officers(params: CompanyOfficersInput) -> str:
+    async def company_officers(
+        company_number: Annotated[str, Field(description="Companies House company number", min_length=6, max_length=10)],
+        include_resigned: Annotated[bool, Field(description="If true, include resigned officers alongside active ones")] = False,
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """List directors and officers for a Companies House company number.
 
         Returns names, roles, appointment dates, nationality, and total
-        appointment count. Directors with a high appointment count (≥10 other
-        companies) are flagged as a risk signal — a common trait in nominee
+        appointment count. Directors with a high appointment count (>=10 other
+        companies) are flagged as a risk signal -- a common trait in nominee
         director fraud and phoenix company structures.
-
-        Args:
-            params (CompanyOfficersInput): Validated input containing:
-                - company_number (str): CH company number
-                - include_resigned (bool): Include resigned officers (default False)
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Officer list with risk flags for high-appointment-count directors.
         """
+        company_number = _normalise_company_number(company_number)
         qs: dict[str, Any] = {"items_per_page": 100}
-        if not params.include_resigned:
+        if not include_resigned:
             qs["register_view"] = "true"
 
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(
                     client, "GET",
-                    f"/company/{params.company_number}/officers",
+                    f"/company/{company_number}/officers",
                     params=qs,
                 )
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return f"No officers found for company **{params.company_number}**."
+                return f"No officers found for company **{company_number}**."
             return format_api_error(exc, "company_officers")
         except Exception as exc:
             return format_api_error(exc, "company_officers")
@@ -319,14 +305,14 @@ def register_tools(mcp: FastMCP) -> None:
         items = data.get("items", [])
         total = data.get("total_results", 0)
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(
-                {"company_number": params.company_number, "total": total, "officers": items},
+                {"company_number": company_number, "total": total, "officers": items},
                 indent=2,
             )
 
         if not items:
-            return f"No officers found for company **{params.company_number}**."
+            return f"No officers found for company **{company_number}**."
 
         high_count_flags = [
             o for o in items
@@ -334,12 +320,12 @@ def register_tools(mcp: FastMCP) -> None:
         ]
 
         lines = [
-            f"## Officers — {params.company_number}\n",
-            f"**{total} total officers** ({'including resigned' if params.include_resigned else 'active only'})\n",
+            f"## Officers — {company_number}\n",
+            f"**{total} total officers** ({'including resigned' if include_resigned else 'active only'})\n",
         ]
         if high_count_flags:
             lines.append(
-                f"🚩 **{len(high_count_flags)} director(s) with ≥{HIGH_APPOINTMENT_COUNT} appointments** "
+                f"🚩 **{len(high_count_flags)} director(s) with >={HIGH_APPOINTMENT_COUNT} appointments** "
                 "(nominee/phoenix risk signal)\n"
             )
         lines.append("")
@@ -361,32 +347,29 @@ def register_tools(mcp: FastMCP) -> None:
             "openWorldHint": True,
         },
     )
-    async def company_psc(params: CompanyPSCInput) -> str:
+    async def company_psc(
+        company_number: Annotated[str, Field(description="Companies House company number", min_length=6, max_length=10)],
+        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
+    ) -> str:
         """Retrieve Persons with Significant Control (PSC) for a company.
 
-        PSC data reveals beneficial ownership — individuals or corporate entities
+        PSC data reveals beneficial ownership -- individuals or corporate entities
         holding >25% shares, voting rights, or appointment power. Corporate PSC
         entries with overseas registration addresses are a key flag in beneficial
         ownership investigations.
-
-        Args:
-            params (CompanyPSCInput): Validated input containing:
-                - company_number (str): CH company number
-                - response_format (ResponseFormat): 'markdown' or 'json'
-
-        Returns:
-            str: Beneficial owner list with nature of control and domicile.
         """
+        company_number = _normalise_company_number(company_number)
+
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(
                     client, "GET",
-                    f"/company/{params.company_number}/persons-with-significant-control",
+                    f"/company/{company_number}/persons-with-significant-control",
                 )
                 data = resp.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
-                return f"No PSC data found for company **{params.company_number}**."
+                return f"No PSC data found for company **{company_number}**."
             return format_api_error(exc, "company_psc")
         except Exception as exc:
             return format_api_error(exc, "company_psc")
@@ -394,15 +377,15 @@ def register_tools(mcp: FastMCP) -> None:
         items = data.get("items", [])
         total = data.get("total_results", 0)
 
-        if params.response_format == ResponseFormat.JSON:
+        if response_format == "json":
             return json.dumps(
-                {"company_number": params.company_number, "total": total, "psc": items},
+                {"company_number": company_number, "total": total, "psc": items},
                 indent=2,
             )
 
         if not items:
             return (
-                f"No PSC entries for **{params.company_number}**. "
+                f"No PSC entries for **{company_number}**. "
                 "This may indicate exempt status or an unresolved exemption notice."
             )
 
@@ -415,7 +398,7 @@ def register_tools(mcp: FastMCP) -> None:
         ]
 
         lines = [
-            f"## Persons with Significant Control — {params.company_number}\n",
+            f"## Persons with Significant Control — {company_number}\n",
             f"**{total} PSC entries**\n",
         ]
         if overseas_flags:

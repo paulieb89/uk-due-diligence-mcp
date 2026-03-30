@@ -1,4 +1,4 @@
-# uk-biz-intel-mcp
+# uk-due-diligence-mcp
 
 **UK Business Intelligence MCP Server**
 
@@ -7,12 +7,6 @@ Five legally-mandated public registers. Zero paywalls. One cross-registry reason
 > *"Run due diligence on Acme Ltd"* → the agent calls five registries, surfaces a director with 60 appointments, finds a winding-up petition from six months ago, and notes the VAT number doesn't match the trading address.
 
 ---
-
-## The Pitch
-
-This isn't a Companies House wrapper — dozens exist. It's a **due diligence layer**.
-
-Every data source is a publicly mandated register with a free official API. The value isn't any individual API — it's what you get when they're unified under a single MCP server and an agent can reason across all five simultaneously.
 
 **Data sources:**
 
@@ -46,7 +40,7 @@ Every data source is a publicly mandated register with a free official API. The 
 
 | Tool | Description |
 |------|-------------|
-| `entity_due_diligence` | **The flagship tool.** One call → five registers → structured risk report |
+| `entity_due_diligence` | One call → five registers → structured risk report |
 
 ---
 
@@ -81,8 +75,8 @@ HMLR, Gazette, and HMRC VAT require no API key.
 ### Local development
 
 ```bash
-git clone https://github.com/you/uk-biz-intel-mcp
-cd uk-biz-intel-mcp
+git clone https://github.com/you/uk-due-diligence-mcp
+cd uk-due-diligence-mcp
 
 # Create .env
 cat > .env <<EOF
@@ -103,12 +97,12 @@ Server starts at `http://localhost:8080/mcp`.
 ### Fly.io deployment
 
 ```bash
-fly launch --name uk-biz-intel-mcp --region lhr
+fly launch --name uk-due-diligence-mcp --region lhr
 fly secrets set CH_API_KEY=xxx CHARITY_API_KEY=xxx MCP_SERVER_KEY=xxx
 fly deploy
 ```
 
-Server available at `https://uk-biz-intel-mcp.fly.dev/mcp`.
+Server available at `https://uk-due-diligence-mcp.fly.dev/mcp`.
 
 ---
 
@@ -119,8 +113,8 @@ Add to your MCP client config:
 ```json
 {
   "mcpServers": {
-    "uk-biz-intel": {
-      "url": "https://uk-biz-intel-mcp.fly.dev/mcp",
+    "uk-due-diligence": {
+      "url": "https://uk-due-diligence-mcp.fly.dev/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_MCP_SERVER_KEY"
       }
@@ -151,7 +145,7 @@ Expected agent flow:
 ## Project Structure
 
 ```
-uk-biz-intel-mcp/
+uk-due-diligence-mcp/
 ├── server.py              # FastMCP init, tool registration, transport config
 ├── tools/
 │   ├── companies_house.py # company_search, company_profile, company_officers, company_psc
