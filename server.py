@@ -26,9 +26,11 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 # Load .env for local development
 load_dotenv()
@@ -48,11 +50,32 @@ MCP_SERVER_KEY = _require_env("MCP_SERVER_KEY", required=False)
 PORT = int(os.environ.get("PORT", "8080"))
 
 # ---------------------------------------------------------------------------
+# Tool call logging middleware
+# ---------------------------------------------------------------------------
+
+class ToolLogger(Middleware):
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        tool_name = context.message.name
+        args = context.message.arguments or {}
+        # Summarise args: show values but truncate long strings
+        arg_summary = ", ".join(
+            f"{k}={repr(v)[:60]}" for k, v in args.items()
+        )
+        t0 = time.time()
+        print(f"[TOOL] {tool_name}({arg_summary})", file=sys.stderr, flush=True)
+        result = await call_next(context)
+        elapsed = time.time() - t0
+        print(f"[TOOL] {tool_name} -> {elapsed:.1f}s", file=sys.stderr, flush=True)
+        return result
+
+
+# ---------------------------------------------------------------------------
 # Initialise FastMCP
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP(
     name="uk_due_diligence_mcp",
+    middleware=[ToolLogger()],
     instructions=(
         "UK due diligence MCP server. "
         "Nine tools across five public registers: Companies House, "
