@@ -1,8 +1,12 @@
 # uk-due-diligence-mcp
 
-Nine tools across five UK public registers. 
+Nine tools across five UK public registers. Zero paywalls. All official APIs.
 
 Give an agent a company name and it pulls corporate status, filing compliance, director networks, beneficial ownership chains, insolvency notices, VAT validation, and property transactions.
+
+Every data source is a legally-mandated register with a free official API.
+
+[![PyPI](https://img.shields.io/pypi/v/uk-due-diligence-mcp)](https://pypi.org/project/uk-due-diligence-mcp/)
 
 ---
 
@@ -36,6 +40,12 @@ Give an agent a company name and it pulls corporate status, filing compliance, d
 
 ## Setup
 
+### Install from PyPI
+
+```bash
+pip install uk-due-diligence-mcp
+```
+
 ### API Keys
 
 | Key | Where to get it |
@@ -48,7 +58,7 @@ HMLR, Gazette, and HMRC VAT require no API key.
 ### Local development
 
 ```bash
-git clone https://github.com/bch-nz/uk-due-diligence-mcp
+git clone https://github.com/paulieb89/uk-due-diligence-mcp
 cd uk-due-diligence-mcp
 
 cp .env.example .env
@@ -72,7 +82,20 @@ fly deploy
 
 ## Connecting
 
-Add to your MCP client config:
+### Claude Code / .mcp.json
+
+```json
+{
+  "mcpServers": {
+    "uk-due-diligence": {
+      "type": "http",
+      "url": "https://uk-due-diligence-mcp.fly.dev/mcp"
+    }
+  }
+}
+```
+
+### Claude.ai / other MCP clients
 
 ```json
 {

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "uk-due-diligence": {
+      "type": "http",
+      "url": "https://uk-due-diligence-mcp.fly.dev/mcp"
+    }
+  }
+}
