@@ -23,7 +23,6 @@ Tools (9):
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -34,7 +33,7 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import JSONResponse
 
 # Load .env for local development
 load_dotenv()
@@ -150,114 +149,30 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "uptime": int(time.time() - SERVER_START)})
 
 
-@mcp.custom_route("/dashboard", methods=["GET"])
-async def dashboard(request: Request) -> HTMLResponse:
+@mcp.custom_route("/stats", methods=["GET"])
+async def stats_endpoint(request: Request) -> JSONResponse:
     uptime = int(time.time() - SERVER_START)
-    hours, remainder = divmod(uptime, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    uptime_str = f"{hours}h {minutes}m {seconds}s"
-
-    # Build tool rows
-    tool_rows = ""
+    tools = {}
     for name in sorted(stats["tools"]):
         t = stats["tools"][name]
-        avg = t["total_time"] / t["calls"] if t["calls"] else 0
-        tool_rows += f"""
-        <tr>
-            <td><code>{name}</code></td>
-            <td>{t['calls']}</td>
-            <td>{t['errors']}</td>
-            <td>{avg:.2f}s</td>
-            <td>{t['last_called'][:19] if t['last_called'] else '—'}</td>
-            <td class="args">{t['last_args'] or '—'}</td>
-        </tr>"""
-
-    # Build recent call rows
-    recent_rows = ""
-    for r in reversed(stats["recent"]):
-        err_class = ' class="error"' if r["error"] else ""
-        recent_rows += f"""
-        <tr{err_class}>
-            <td>{r['at']}</td>
-            <td><code>{r['tool']}</code></td>
-            <td>{r['time']}</td>
-            <td class="args">{r['args']}</td>
-        </tr>"""
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-<title>uk-due-diligence-mcp</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-    body {{ font-family: -apple-system, system-ui, sans-serif; background: #0a0a0a; color: #e0e0e0; padding: 2rem; }}
-    h1 {{ font-size: 1.4rem; color: #fff; margin-bottom: 0.3rem; }}
-    .subtitle {{ color: #888; font-size: 0.85rem; margin-bottom: 2rem; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem; }}
-    .card {{ background: #141414; border: 1px solid #222; border-radius: 8px; padding: 1.2rem; }}
-    .card .label {{ font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .card .value {{ font-size: 1.8rem; font-weight: 600; color: #fff; margin-top: 0.3rem; }}
-    .card .value.green {{ color: #4ade80; }}
-    .card .value.red {{ color: #f87171; }}
-    h2 {{ font-size: 1rem; color: #ccc; margin: 1.5rem 0 0.8rem; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.82rem; }}
-    th {{ text-align: left; color: #888; font-weight: 500; padding: 0.5rem 0.8rem; border-bottom: 1px solid #222; }}
-    td {{ padding: 0.5rem 0.8rem; border-bottom: 1px solid #1a1a1a; }}
-    tr:hover {{ background: #1a1a1a; }}
-    tr.error {{ background: #1c0a0a; }}
-    code {{ background: #1e1e1e; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.8rem; }}
-    .args {{ color: #888; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-    .footer {{ margin-top: 2rem; color: #444; font-size: 0.75rem; }}
-</style>
-</head>
-<body>
-    <h1>uk-due-diligence-mcp</h1>
-    <div class="subtitle">Nine tools across five UK public registers</div>
-
-    <div class="grid">
-        <div class="card">
-            <div class="label">Uptime</div>
-            <div class="value">{uptime_str}</div>
-        </div>
-        <div class="card">
-            <div class="label">Total Calls</div>
-            <div class="value green">{stats['total_calls']}</div>
-        </div>
-        <div class="card">
-            <div class="label">Errors</div>
-            <div class="value {'red' if stats['total_errors'] else 'green'}">{stats['total_errors']}</div>
-        </div>
-        <div class="card">
-            <div class="label">Tools</div>
-            <div class="value">9</div>
-        </div>
-    </div>
-
-    <h2>Tool Usage</h2>
-    <table>
-        <thead>
-            <tr><th>Tool</th><th>Calls</th><th>Errors</th><th>Avg Time</th><th>Last Called</th><th>Last Args</th></tr>
-        </thead>
-        <tbody>
-            {tool_rows if tool_rows else '<tr><td colspan="6" style="color:#555">No calls yet</td></tr>'}
-        </tbody>
-    </table>
-
-    <h2>Recent Calls</h2>
-    <table>
-        <thead>
-            <tr><th>Time</th><th>Tool</th><th>Duration</th><th>Arguments</th></tr>
-        </thead>
-        <tbody>
-            {recent_rows if recent_rows else '<tr><td colspan="4" style="color:#555">No calls yet</td></tr>'}
-        </tbody>
-    </table>
-
-    <div class="footer">Stats reset on deploy. Data is in-memory only.</div>
-</body>
-</html>"""
-    return HTMLResponse(html)
+        tools[name] = {
+            "calls": t["calls"],
+            "errors": t["errors"],
+            "avg_time": round(t["total_time"] / t["calls"], 3) if t["calls"] else 0,
+            "last_called": t["last_called"],
+            "last_args": t["last_args"],
+        }
+    return JSONResponse(
+        {
+            "server": "uk-due-diligence-mcp",
+            "uptime_seconds": uptime,
+            "total_calls": stats["total_calls"],
+            "total_errors": stats["total_errors"],
+            "tools": tools,
+            "recent": list(reversed(stats["recent"])),
+        },
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 
 # ---------------------------------------------------------------------------
