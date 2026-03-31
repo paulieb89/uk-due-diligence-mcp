@@ -1,14 +1,12 @@
 # uk-due-diligence-mcp
 
-**UK Business Intelligence MCP Server**
+Nine tools across five UK public registers. 
 
-Five legally-mandated public registers. Zero paywalls. One cross-registry reasoning layer.
-
-> *"Run due diligence on Acme Ltd"* → the agent calls five registries, surfaces a director with 60 appointments, finds a winding-up petition from six months ago, and notes the VAT number doesn't match the trading address.
+Give an agent a company name and it pulls corporate status, filing compliance, director networks, beneficial ownership chains, insolvency notices, VAT validation, and property transactions.
 
 ---
 
-**Data sources:**
+## Data Sources
 
 | Register | API | Auth |
 |----------|-----|------|
@@ -22,8 +20,6 @@ Five legally-mandated public registers. Zero paywalls. One cross-registry reason
 
 ## Tools
 
-### Layer 1 — Raw Registry Tools
-
 | Tool | Register | Description |
 |------|----------|-------------|
 | `company_search` | Companies House | Search by name/keyword with status/type filters |
@@ -33,30 +29,8 @@ Five legally-mandated public registers. Zero paywalls. One cross-registry reason
 | `charity_search` | Charity Commission | Search by name, filter by registration status |
 | `charity_profile` | Charity Commission | Full record: trustees, finances, governing doc |
 | `land_title_search` | HMLR | Property ownership via SPARQL PPI query |
-| `gazette_insolvency` | The Gazette | Corporate insolvency notices (codes 2441–2460) |
+| `gazette_insolvency` | The Gazette | Corporate insolvency notices (codes 2441-2460) |
 | `vat_validate` | HMRC VAT | Trading name + address as registered for VAT |
-
-### Layer 2 — Composite
-
-| Tool | Description |
-|------|-------------|
-| `entity_due_diligence` | One call → five registers → structured risk report |
-
----
-
-## Risk Signals Surfaced
-
-`entity_due_diligence` flags:
-
-- 🚨 Company status in distress set (dissolved, liquidation, administration, receivership)
-- 🚩 Accounts overdue
-- 🚩 Confirmation statement overdue
-- 🚩 Active charges registered
-- 🚩 Directors with ≥10 other appointments (nominee/phoenix signal)
-- 🚩 Offshore corporate PSC (beneficial ownership chain extends overseas)
-- 🚨 Active Gazette insolvency notices (sorted by severity)
-- ℹ️ Land Registry price paid transactions (optional, `include_property=True`)
-- ℹ️ Charity Commission cross-match (optional, `include_charity=True`)
 
 ---
 
@@ -68,27 +42,19 @@ Five legally-mandated public registers. Zero paywalls. One cross-registry reason
 |-----|----------------|
 | `CH_API_KEY` | [developer.company-information.service.gov.uk](https://developer.company-information.service.gov.uk) — free |
 | `CHARITY_API_KEY` | [api-portal.charitycommission.gov.uk](https://api-portal.charitycommission.gov.uk) — free |
-| `MCP_SERVER_KEY` | Generate yourself — used for client auth to the MCP server |
 
 HMLR, Gazette, and HMRC VAT require no API key.
 
 ### Local development
 
 ```bash
-git clone https://github.com/you/uk-due-diligence-mcp
+git clone https://github.com/bch-nz/uk-due-diligence-mcp
 cd uk-due-diligence-mcp
 
-# Create .env
-cat > .env <<EOF
-CH_API_KEY=your_ch_key_here
-CHARITY_API_KEY=your_charity_key_here
-MCP_SERVER_KEY=your_server_key_here
-EOF
+cp .env.example .env
+# Fill in your API keys
 
-# Install
 pip install -e .
-
-# Run
 python server.py
 ```
 
@@ -98,15 +64,13 @@ Server starts at `http://localhost:8080/mcp`.
 
 ```bash
 fly launch --name uk-due-diligence-mcp --region lhr
-fly secrets set CH_API_KEY=xxx CHARITY_API_KEY=xxx MCP_SERVER_KEY=xxx
+fly secrets set CH_API_KEY=xxx CHARITY_API_KEY=xxx
 fly deploy
 ```
 
-Server available at `https://uk-due-diligence-mcp.fly.dev/mcp`.
-
 ---
 
-## Connecting to Claude
+## Connecting
 
 Add to your MCP client config:
 
@@ -114,10 +78,7 @@ Add to your MCP client config:
 {
   "mcpServers": {
     "uk-due-diligence": {
-      "url": "https://uk-due-diligence-mcp.fly.dev/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_MCP_SERVER_KEY"
-      }
+      "url": "https://uk-due-diligence-mcp.fly.dev/mcp"
     }
   }
 }
@@ -125,20 +86,13 @@ Add to your MCP client config:
 
 ---
 
-## The Demo Query
+## Demo
 
 ```
-Run full due diligence on Acme Construction Ltd
+Run due diligence on Carillion PLC
 ```
 
-Expected agent flow:
-1. `entity_due_diligence("Acme Construction Ltd")` →
-2. Internally: `company_search` → resolves company number
-3. `company_profile` → checks status, overdue flags, charges
-4. `company_officers` → scans appointment counts
-5. `company_psc` → maps beneficial ownership chain
-6. `gazette_insolvency` → scans all 14 corporate notice codes
-7. Returns: structured risk report with traffic-light score
+The agent calls `company_search` to resolve the company number, then `company_profile`, `company_officers`, `company_psc`, and `gazette_insolvency` — reasoning across all five registries to surface risk signals.
 
 ---
 
@@ -146,22 +100,18 @@ Expected agent flow:
 
 ```
 uk-due-diligence-mcp/
-├── server.py              # FastMCP init, tool registration, transport config
-├── tools/
-│   ├── companies_house.py # company_search, company_profile, company_officers, company_psc
-│   ├── charity.py         # charity_search, charity_profile
-│   ├── land_registry.py   # land_title_search (SPARQL + REST)
-│   ├── gazette.py         # gazette_insolvency (JSON-LD, notice codes 2441–2460)
-│   ├── hmrc_vat.py        # vat_validate
-│   └── composite.py       # entity_due_diligence
-├── clients/
-│   └── http.py            # Shared httpx clients, retry backoff, error formatting
-├── models/
-│   └── inputs.py          # Pydantic v2 input models for all tools
+├── server.py           # FastMCP init, tool registration, transport config
+├── companies_house.py  # company_search, company_profile, company_officers, company_psc
+├── charity.py          # charity_search, charity_profile
+├── land_registry.py    # land_title_search (SPARQL + REST)
+├── gazette.py          # gazette_insolvency (JSON-LD, notice codes 2441-2460)
+├── hmrc_vat.py         # vat_validate
+├── http_client.py      # Shared httpx clients, retry backoff, error formatting
+├── inputs.py           # Pydantic v2 input models
 ├── fly.toml
 ├── Dockerfile
 ├── pyproject.toml
-└── README.md
+└── .env.example
 ```
 
 ---
@@ -169,19 +119,16 @@ uk-due-diligence-mcp/
 ## Technical Notes
 
 ### The Gazette API
-Uses a REST+RDF linked-data pattern. Corporate insolvency notice codes span 2441–2460.
-The `entity_due_diligence` tool scans all 14 codes per entity. The read API is
-unauthenticated; auth is write-only (for placing notices).
+REST+RDF linked-data pattern. Corporate insolvency notice codes span 2441-2460.
+The read API is unauthenticated; auth is write-only (for placing notices).
 
 ### HMLR Land Registry
 Free endpoint at `api.landregistry.data.gov.uk`. Returns RDF/Turtle by default —
-the SPARQL endpoint is used for Price Paid Index queries with `Accept: application/sparql-results+json`.
-Covers England and Wales only.
+the SPARQL endpoint is used for Price Paid Index queries. Covers England and Wales only.
 
 ### High-Appointment-Count Signal
-The threshold is set at 10 (configurable via `HIGH_APPOINTMENT_COUNT` in `tools/companies_house.py`).
-A director appearing on 40+ companies is a common pattern in nominee director operations and
-phoenix company structures.
+Directors with 10+ other active appointments are flagged. A director on 40+ companies
+is a common pattern in nominee director operations and phoenix company structures.
 
 ---
 
