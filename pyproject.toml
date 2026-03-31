@@ -5,14 +5,22 @@ build-backend = "hatchling.build"
 [project]
 name = "uk-due-diligence-mcp"
 version = "1.0.0"
-description = "UK Business Intelligence MCP server — unified due diligence across five public registries"
+description = "UK due diligence MCP server — nine tools across five public registers"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-keywords = ["mcp", "uk", "companies-house", "due-diligence", "fastmcp"]
+authors = [
+    { name = "Paul Boucher" },
+]
+keywords = [
+    "mcp", "uk", "companies-house", "charity-commission", "land-registry",
+    "gazette", "hmrc", "vat", "due-diligence", "fastmcp", "kyc", "compliance",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
@@ -22,11 +30,24 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/paulieb89/uk-due-diligence-mcp"
+Repository = "https://github.com/paulieb89/uk-due-diligence-mcp"
+
 [project.scripts]
 uk-due-diligence-mcp = "server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+only-include = [
+    "server.py",
+    "companies_house.py",
+    "charity.py",
+    "land_registry.py",
+    "gazette.py",
+    "hmrc_vat.py",
+    "http_client.py",
+    "inputs.py",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
