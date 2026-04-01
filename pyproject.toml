@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "uk-due-diligence-mcp"
-version = "1.0.1"
+version = "1.0.2"
 description = "UK due diligence MCP server — nine tools across five public registers"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "Paul Boucher" },
@@ -18,13 +18,14 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
-    "fastmcp>=2.0.0",
+    "fastmcp>=3.0.0",
     "httpx>=0.27.0",
     "pydantic>=2.7.0",
     "python-dotenv>=1.0.0",
@@ -36,6 +37,17 @@ Repository = "https://github.com/paulieb89/uk-due-diligence-mcp"
 
 [project.scripts]
 uk-due-diligence-mcp = "server:main"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "fly.toml",
+    "Dockerfile",
+    "server.json",
+    ".mcp.json",
+    ".env.example",
+    "dist/",
+    "research/",
+]
 
 [tool.hatch.build.targets.wheel]
 only-include = [

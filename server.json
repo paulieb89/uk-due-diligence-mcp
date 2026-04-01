@@ -3,7 +3,7 @@
   "name": "io.github.paulieb89/uk-due-diligence-mcp",
   "title": "UK Due Diligence",
   "description": "UK due diligence — Companies House, Charity Commission, Land Registry, Gazette, HMRC VAT",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "websiteUrl": "https://bouch.dev",
   "repository": {
     "url": "https://github.com/paulieb89/uk-due-diligence-mcp",
@@ -16,7 +16,7 @@
     {
       "registryType": "pypi",
       "identifier": "uk-due-diligence-mcp",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "runtimeHint": "uvx",
       "transport": { "type": "stdio" }
     }

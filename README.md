@@ -158,3 +158,5 @@ is a common pattern in nominee director operations and phoenix company structure
 ## Licence
 
 MIT
+
+<!-- mcp-name: io.github.paulieb89/uk-due-diligence-mcp -->
