@@ -11,14 +11,5 @@
   },
   "remotes": [
     { "type": "streamable-http", "url": "https://uk-due-diligence-mcp.fly.dev/mcp" }
-  ],
-  "packages": [
-    {
-      "registryType": "pypi",
-      "identifier": "uk-due-diligence-mcp",
-      "version": "1.0.2",
-      "runtimeHint": "uvx",
-      "transport": { "type": "stdio" }
-    }
   ]
 }
