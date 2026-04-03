@@ -17,47 +17,43 @@ Land Register of Scotland and Land & Property Services NI are separate.
 from __future__ import annotations
 
 import json
+import urllib.parse
 from typing import Annotated, Any
-from urllib.parse import quote
 
 from pydantic import Field
 from mcp.server.fastmcp import FastMCP
 
-from http_client import (
-    _request_with_retry,
-    hmlr_client,
-    format_api_error,
-)
+from http_client import format_api_error
 
 # ---------------------------------------------------------------------------
 # SPARQL query helper for PPI (Price Paid Index) search
 # ---------------------------------------------------------------------------
 
-SPARQL_ENDPOINT = "https://landregistry.data.gov.uk/landregistry/query"
+SPARQL_ENDPOINT = "https://landregistry.data.gov.uk/landregistry/sparql"
 
 PPI_QUERY_TEMPLATE = """
 PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
 PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-SELECT ?address ?paon ?saon ?street ?town ?county ?postcode ?amount ?date ?propertyType ?tenure
+SELECT ?pricePaid ?transactionDate ?postcode ?propertyType ?estateType ?paon ?saon ?street ?town ?county
 WHERE {{
-  ?transx lrppi:propertyAddress ?addr ;
-          lrppi:pricePaid ?amount ;
-          lrppi:transactionDate ?date ;
-          lrppi:propertyType/rdfs:label ?propertyType ;
-          lrppi:estateType/rdfs:label ?tenure .
-  ?addr lrcommon:postcode "{postcode}"^^xsd:string ;
-        rdfs:label ?address .
+  VALUES ?postcode {{"{postcode}"^^xsd:string}}
+
+  ?transx lrppi:pricePaid ?pricePaid ;
+          lrppi:transactionDate ?transactionDate ;
+          lrppi:propertyAddress ?addr ;
+          lrppi:propertyType ?propertyType ;
+          lrppi:estateType ?estateType .
+
+  ?addr lrcommon:postcode ?postcode .
   OPTIONAL {{ ?addr lrcommon:paon ?paon }}
   OPTIONAL {{ ?addr lrcommon:saon ?saon }}
   OPTIONAL {{ ?addr lrcommon:street ?street }}
   OPTIONAL {{ ?addr lrcommon:town ?town }}
   OPTIONAL {{ ?addr lrcommon:county ?county }}
-  OPTIONAL {{ ?addr lrcommon:postcode ?postcode }}
 }}
-ORDER BY DESC(?date)
+ORDER BY DESC(?transactionDate)
 LIMIT 10
 """
 
@@ -80,13 +76,15 @@ def _extract_postcode(text: str) -> str | None:
 
 
 def _format_transaction(t: dict[str, Any], idx: int) -> str:
-    price = t.get("amount", "—")
+    price = t.get("pricePaid", "—")
     if isinstance(price, (int, float)):
         price = f"£{price:,.0f}"
+    parts = [p for p in [t.get("paon"), t.get("street"), t.get("town"), t.get("postcode")] if p]
+    address = ", ".join(parts) if parts else "—"
     return (
-        f"{idx}. {t.get('address', '—')}\n"
-        f"   Price: {price} | Date: {t.get('date', '—')} | "
-        f"Type: {t.get('propertyType', '—')} | Tenure: {t.get('tenure', '—')}\n"
+        f"{idx}. {address}\n"
+        f"   Price: {price} | Date: {t.get('transactionDate', '—')} | "
+        f"Type: {t.get('propertyType', '—')} | Tenure: {t.get('estateType', '—')}\n"
     )
 
 
@@ -126,47 +124,50 @@ def register_tools(mcp: FastMCP) -> None:
                 "Please include a postcode, e.g. 'NG1 1AB' or '1 High Street, Nottingham, NG1 1AB'."
             )
 
-        postcode_encoded = quote(postcode)
-
         try:
             import httpx as _httpx
 
-            # 1. Price Paid query via SPARQL REST endpoint
+            # 1. Price Paid query via SPARQL — POST with form-encoded body (endpoint requires POST)
             sparql_query = PPI_QUERY_TEMPLATE.format(postcode=postcode)
+            body = urllib.parse.urlencode({"query": sparql_query}).encode()
             async with _httpx.AsyncClient(timeout=20.0) as client:
-                ppi_resp = await client.get(
+                ppi_resp = await client.post(
                     SPARQL_ENDPOINT,
-                    params={"query": sparql_query, "output": "json"},
-                    headers={"Accept": "application/sparql-results+json"},
+                    content=body,
+                    headers={
+                        "Accept": "application/sparql-results+json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
                 )
                 ppi_resp.raise_for_status()
                 ppi_data = ppi_resp.json()
+
+            def _val(b: dict, key: str) -> str:
+                return b.get(key, {}).get("value", "") or ""
+
+            def _uri_label(uri: str) -> str:
+                """Extract readable label from HMLR URI, e.g. .../propertyType/terraced → Terraced."""
+                return uri.rstrip("/").split("/")[-1].replace("-", " ").title() if uri else "—"
 
             bindings = ppi_data.get("results", {}).get("bindings", [])
             transactions = []
             for b in bindings:
                 transactions.append(
                     {
-                        "address": b.get("address", {}).get("value", "—"),
-                        "amount": b.get("amount", {}).get("value", "—"),
-                        "date": b.get("date", {}).get("value", "—")[:10],
-                        "propertyType": b.get("propertyType", {}).get("value", "—"),
-                        "tenure": b.get("tenure", {}).get("value", "—"),
+                        "pricePaid": int(float(_val(b, "pricePaid"))) if _val(b, "pricePaid") else "—",
+                        "transactionDate": _val(b, "transactionDate")[:10],
+                        "postcode": _val(b, "postcode"),
+                        "paon": _val(b, "paon"),
+                        "saon": _val(b, "saon"),
+                        "street": _val(b, "street"),
+                        "town": _val(b, "town"),
+                        "county": _val(b, "county"),
+                        "propertyType": _uri_label(_val(b, "propertyType")),
+                        "estateType": _uri_label(_val(b, "estateType")),
                     }
                 )
 
-            # 2. Title search (ownership) -- attempt REST title endpoint
             title_data: dict[str, Any] = {}
-            try:
-                async with hmlr_client() as title_client:
-                    title_resp = await _request_with_retry(
-                        title_client, "GET",
-                        f"/title-search.json?postcode={postcode_encoded}",
-                    )
-                    title_data = title_resp.json()
-            except Exception:
-                # Title endpoint may fail -- PPI data still valuable
-                pass
 
         except Exception as exc:
             return format_api_error(exc, "land_title_search")
