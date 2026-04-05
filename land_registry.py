@@ -21,7 +21,7 @@ import urllib.parse
 from typing import Annotated, Any
 
 from pydantic import Field
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from http_client import format_api_error
 

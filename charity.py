@@ -13,7 +13,7 @@ from typing import Annotated, Any
 
 import httpx
 from pydantic import Field
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from http_client import (
     _request_with_retry,

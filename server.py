@@ -11,7 +11,7 @@ Data sources:
   - The Gazette Linked Data API (unauthenticated)
   - HMRC VAT Check API (unauthenticated)
 
-Transport: Streamable HTTP, stateless, deployed on Fly.io.
+Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
 Tools (9):
     company_search, company_profile, company_officers, company_psc
@@ -203,6 +203,7 @@ def main() -> None:
         port=PORT,
         path="/mcp",
         stateless_http=True,
+        json_response=True,
     )
 
 
