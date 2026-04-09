@@ -30,30 +30,22 @@ _STATUS_LABELS = {"R": "Registered", "RM": "Removed"}
 
 
 def _format_charity_summary(item: dict[str, Any]) -> str:
-    reg_num = item.get("reg_charity_number", item.get("registrationNumber", item.get("regno", "—")))
-    raw_status = item.get("reg_status", item.get("registrationStatus", "—"))
+    reg_num = item.get("reg_charity_number", "—")
+    raw_status = item.get("reg_status", "—")
     status = _STATUS_LABELS.get(raw_status, raw_status)
-    name = item.get("charity_name", item.get("charityName", item.get("name", "Unknown")))
-    activities = item.get("charityActivities", item.get("activities", ""))
-    activities_short = (activities[:120] + "…") if len(activities) > 120 else activities
+    name = item.get("charity_name", "Unknown")
+    date_reg = (item.get("date_of_registration") or "")[:10] or "—"
     return (
         f"**{name}**\n"
-        f"  Charity No: {reg_num} | Status: {status}\n"
-        f"  Activities: {activities_short or '—'}\n"
+        f"  Charity No: {reg_num} | Status: {status} | Registered: {date_reg}\n"
     )
 
 
 def _format_finances(item: dict[str, Any]) -> str:
-    income = item.get("income", item.get("latestIncome", None))
-    expenditure = item.get("expenditure", item.get("latestExpenditure", None))
-    if income is not None:
-        income_str = f"£{income:,.0f}" if isinstance(income, (int, float)) else str(income)
-    else:
-        income_str = "—"
-    if expenditure is not None:
-        exp_str = f"£{expenditure:,.0f}" if isinstance(expenditure, (int, float)) else str(expenditure)
-    else:
-        exp_str = "—"
+    income = item.get("latest_income")
+    expenditure = item.get("latest_expenditure")
+    income_str = f"£{income:,.0f}" if isinstance(income, (int, float)) else "—"
+    exp_str = f"£{expenditure:,.0f}" if isinstance(expenditure, (int, float)) else "—"
     return f"Income: {income_str} | Expenditure: {exp_str}"
 
 
@@ -175,23 +167,62 @@ def register_tools(mcp: FastMCP) -> None:
         if response_format == "json":
             return json.dumps(data, indent=2)
 
-        name = data.get("charityName", data.get("name", "Unknown"))
-        reg_num = data.get("registrationNumber", data.get("regno", charity_number))
-        status = data.get("registrationStatus", "—")
-        obj = data.get("charityActivities", data.get("objects", "—"))
-        doc_type = data.get("governingDocumentDescription", "—")
-        area = data.get("areaOfBenefit", "—")
-        trustees = data.get("trustees", [])
-        trustee_count = len(trustees) if isinstance(trustees, list) else data.get("numTrustees", "—")
+        name = data.get("charity_name", "Unknown")
+        reg_num = data.get("reg_charity_number", charity_number)
+        raw_status = data.get("reg_status", "—")
+        status = _STATUS_LABELS.get(raw_status, raw_status)
+        charity_type = data.get("charity_type", "—")
+        co_number = data.get("charity_co_reg_number", "")
+        date_reg = (data.get("date_of_registration") or "")[:10] or "—"
+        insolvent = data.get("insolvent", False)
+        in_admin = data.get("in_administration", False)
+
+        # Trustees
+        trustee_list = data.get("trustee_names", [])
+        trustee_names = [t.get("trustee_name", "—") for t in trustee_list] if trustee_list else []
+
+        # Who/What/Where classification
+        www = data.get("who_what_where", [])
+        what_items = [w["classification_desc"] for w in www if w.get("classification_type") == "What"]
+        who_items = [w["classification_desc"] for w in www if w.get("classification_type") == "Who"]
+        where_items = [w["classification_desc"] for w in www if w.get("classification_type") == "Where"]
+
+        # Countries of operation
+        countries = data.get("CharityAoOCountryContinent", [])
+        country_names = [c.get("country", "") for c in countries[:10]]
 
         finances = _format_finances(data)
 
-        return (
-            f"## {name}\n"
-            f"**Charity No:** {reg_num} | **Status:** {status}  \n"
-            f"**Governing Document:** {doc_type}  \n"
-            f"**Area of Benefit:** {area}  \n"
-            f"**Trustees:** {trustee_count}  \n"
-            f"**Finances:** {finances}  \n\n"
-            f"### Objects / Activities\n{obj or '—'}\n"
-        )
+        # Address
+        addr_parts = [data.get(f"address_line_{w}") for w in ["one", "two", "three", "four", "five"]]
+        addr_parts = [p for p in addr_parts if p]
+        postcode = data.get("address_post_code", "")
+        address = ", ".join(addr_parts + ([postcode] if postcode else [])) or "—"
+
+        # Risk flags
+        flags = []
+        if insolvent:
+            flags.append("INSOLVENT")
+        if in_admin:
+            flags.append("IN ADMINISTRATION")
+        flag_str = f"  \n**Flags:** {', '.join(flags)}" if flags else ""
+
+        lines = [
+            f"## {name}",
+            f"**Charity No:** {reg_num} | **Status:** {status} | **Type:** {charity_type}  ",
+            f"**Registered:** {date_reg}" + (f" | **Companies House:** {co_number}" if co_number else "") + "  ",
+            f"**Address:** {address}  ",
+            f"**Finances:** {finances}  ",
+            f"**Trustees ({len(trustee_names)}):** {', '.join(trustee_names) if trustee_names else '—'}  ",
+            flag_str,
+        ]
+        if what_items:
+            lines.append(f"\n### What\n{', '.join(what_items)}")
+        if who_items:
+            lines.append(f"\n### Who\n{', '.join(who_items)}")
+        if where_items:
+            lines.append(f"\n### Where\n{', '.join(where_items)}")
+        if country_names:
+            lines.append(f"\n### Countries of Operation\n{', '.join(country_names)}")
+
+        return "\n".join(lines)
