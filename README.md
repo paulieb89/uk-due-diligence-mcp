@@ -1,8 +1,8 @@
 # uk-due-diligence-mcp
 
-Nine tools across five UK public registers. Zero paywalls. All official APIs.
+Eleven tools across five UK public registers. Zero paywalls. All official APIs.
 
-Give an agent a company name and it pulls corporate status, filing compliance, director networks, beneficial ownership chains, insolvency notices, VAT validation, and property transactions.
+Give an agent a company name and it pulls corporate status, filing compliance, director networks, beneficial ownership chains, disqualification checks, insolvency notices, VAT validation, and property transactions.
 
 Every data source is a legally-mandated register with a free official API.
 
@@ -30,6 +30,8 @@ Every data source is a legally-mandated register with a free official API.
 | `company_profile` | Companies House | Full profile: status, filing compliance, charges |
 | `company_officers` | Companies House | Directors with high-appointment-count risk flag |
 | `company_psc` | Companies House | Beneficial owners, PSC chain, offshore flags |
+| `disqualified_search` | Companies House | Search disqualified directors by name |
+| `disqualified_profile` | Companies House | Full disqualification record, period, Act, companies |
 | `charity_search` | Charity Commission | Search by name, filter by registration status |
 | `charity_profile` | Charity Commission | Full record: trustees, finances, governing doc |
 | `land_title_search` | HMLR | Property ownership via SPARQL PPI query |
@@ -125,6 +127,7 @@ The agent calls `company_search` to resolve the company number, then `company_pr
 uk-due-diligence-mcp/
 ├── server.py           # FastMCP init, tool registration, transport config
 ├── companies_house.py  # company_search, company_profile, company_officers, company_psc
+├── disqualified.py     # disqualified_search, disqualified_profile
 ├── charity.py          # charity_search, charity_profile
 ├── land_registry.py    # land_title_search (SPARQL + REST)
 ├── gazette.py          # gazette_insolvency (JSON-LD, notice codes 2441-2460)
