@@ -283,9 +283,11 @@ def register_tools(mcp: FastMCP) -> None:
         director fraud and phoenix company structures.
         """
         company_number = _normalise_company_number(company_number)
+        # NB: do NOT use register_view=true — it requires a companion
+        # register_type param and only returns data for the minority of
+        # companies whose statutory register is held at Companies House.
+        # Filter resigned officers client-side on `resigned_on` instead.
         qs: dict[str, Any] = {"items_per_page": 100}
-        if not include_resigned:
-            qs["register_view"] = "true"
 
         try:
             async with companies_house_client() as client:
@@ -303,7 +305,11 @@ def register_tools(mcp: FastMCP) -> None:
             return format_api_error(exc, "company_officers")
 
         items = data.get("items", [])
-        total = data.get("total_results", 0)
+        if not include_resigned:
+            items = [o for o in items if not o.get("resigned_on")]
+            total = len(items)
+        else:
+            total = data.get("total_results", 0)
 
         if response_format == "json":
             return json.dumps(
