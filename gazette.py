@@ -25,17 +25,13 @@ Query params: ?noticecode=XXXX&text=NAME&start-date=YYYY-MM-DD&end-date=YYYY-MM-
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any
 
 from pydantic import Field
 from fastmcp import FastMCP
 
-from http_client import (
-    _request_with_retry,
-    gazette_client,
-    format_api_error,
-)
+from http_client import _request_with_retry, gazette_client
+from models import GazetteInsolvencyResult, GazetteNotice
 
 # ---------------------------------------------------------------------------
 # Notice code taxonomy
@@ -109,17 +105,6 @@ def _extract_notices(graph: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return notices
 
 
-def _format_notice(n: dict[str, Any], idx: int) -> str:
-    severity = SEVERITY.get(n["notice_code"], 0)
-    flag = "🚨" if severity >= 7 else ("🚩" if severity >= 4 else "ℹ️")
-    content_preview = n["content"][:200] + "…" if len(n["content"]) > 200 else n["content"]
-    return (
-        f"{idx}. {flag} **{n['notice_type']}** (code {n['notice_code']})\n"
-        f"   Date: {n['date']} | Edition: {n['edition']}\n"
-        f"   {content_preview or '(No content preview available)'}\n"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -141,17 +126,17 @@ def register_tools(mcp: FastMCP) -> None:
         notice_type: Annotated[str | None, Field(description="Filter by notice code (e.g. '2441' winding-up petition, '2443' winding-up order, '2448' administration order, '2460' striking-off). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
-        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
-    ) -> str:
+        max_content_chars: Annotated[int, Field(description="Per-notice cap on the free-text `content` field. Default 500 keeps responses bounded; raise for notices where the full legal wording matters.", ge=50, le=20000)] = 500,
+    ) -> GazetteInsolvencyResult:
         """Search The Gazette's linked-data API for corporate insolvency notices.
 
-        Searches notice codes 2441-2460 (winding-up petitions, administration orders,
-        liquidation appointments, striking-off notices, etc.) by entity name.
-        Results are sorted by severity -- winding-up orders and administration orders
-        appear first.
+        Searches notice codes 2441-2460 (winding-up petitions, administration
+        orders, liquidation appointments, striking-off notices, etc.) by
+        entity name. Results are sorted by severity — winding-up orders and
+        administration orders appear first.
 
-        The Gazette is the official UK public record. A notice here means the event
-        has been formally published and is legally effective.
+        The Gazette is the official UK public record. A notice here means
+        the event has been formally published and is legally effective.
         """
         # Build target notice codes
         if notice_type:
@@ -161,33 +146,30 @@ def register_tools(mcp: FastMCP) -> None:
 
         all_notices: list[dict[str, Any]] = []
 
-        try:
-            async with gazette_client() as client:
-                for code in codes_to_search:
-                    qs: dict[str, Any] = {
-                        "noticecode": code,
-                        "text": entity_name,
-                        "results-page-size": 10,
-                        "format": "application/json",
-                    }
-                    if start_date:
-                        qs["start-date"] = start_date
-                    if end_date:
-                        qs["end-date"] = end_date
+        async with gazette_client() as client:
+            for code in codes_to_search:
+                qs: dict[str, Any] = {
+                    "noticecode": code,
+                    "text": entity_name,
+                    "results-page-size": 10,
+                    "format": "application/json",
+                }
+                if start_date:
+                    qs["start-date"] = start_date
+                if end_date:
+                    qs["end-date"] = end_date
 
-                    try:
-                        resp = await _request_with_retry(client, "GET", "", params=qs)
-                        raw = resp.json()
-                        # JSON-LD: top-level dict with @graph array
-                        graph = raw.get("@graph", []) if isinstance(raw, dict) else []
-                        notices = _extract_notices(graph)
-                        all_notices.extend(notices)
-                    except Exception:
-                        # Per-code failures are non-fatal -- continue scanning
-                        continue
-
-        except Exception as exc:
-            return format_api_error(exc, "gazette_insolvency")
+                try:
+                    resp = await _request_with_retry(client, "GET", "", params=qs)
+                    raw = resp.json()
+                    # JSON-LD: top-level dict with @graph array
+                    graph = raw.get("@graph", []) if isinstance(raw, dict) else []
+                    notices = _extract_notices(graph)
+                    all_notices.extend(notices)
+                except Exception:
+                    # Per-code failures are non-fatal -- continue scanning.
+                    # Graceful degradation per lesson 19.
+                    continue
 
         # Re-sort combined results
         all_notices.sort(
@@ -195,35 +177,38 @@ def register_tools(mcp: FastMCP) -> None:
             reverse=True,
         )
 
-        if response_format == "json":
-            return json.dumps(
-                {
-                    "entity_name": entity_name,
-                    "total_notices": len(all_notices),
-                    "notices": all_notices,
-                },
-                indent=2,
+        notice_models: list[GazetteNotice] = []
+        for n in all_notices:
+            raw_content = n.get("content") or ""
+            original_length = len(raw_content)
+            if original_length > max_content_chars:
+                content_out = raw_content[:max_content_chars] + " …[truncated]"
+                content_truncated = True
+            else:
+                content_out = raw_content if raw_content else None
+                content_truncated = False
+
+            code = n.get("notice_code")
+            notice_models.append(
+                GazetteNotice(
+                    notice_id=n.get("notice_id"),
+                    notice_code=code,
+                    notice_type=n.get("notice_type"),
+                    severity=SEVERITY.get(code or "", 0),
+                    date=n.get("date") if n.get("date") != "—" else None,
+                    edition=n.get("edition") if n.get("edition") != "—" else None,
+                    title=n.get("title") if n.get("title") != "—" else None,
+                    content=content_out,
+                    content_truncated=content_truncated,
+                    content_original_length=original_length,
+                )
             )
 
-        if not all_notices:
-            return (
-                f"✅ No corporate insolvency notices found in The Gazette for "
-                f"**{entity_name}**"
-                + (f" since {start_date}" if start_date else "")
-                + "."
-            )
-
-        lines = [
-            f"## Gazette Insolvency Notices — '{entity_name}'\n",
-            f"**{len(all_notices)} notice(s) found**",
-        ]
-        if start_date:
-            lines[-1] += f" from {start_date}"
-        if end_date:
-            lines[-1] += f" to {end_date}"
-        lines.append("")
-
-        for i, notice in enumerate(all_notices, 1):
-            lines.append(_format_notice(notice, i))
-
-        return "\n".join(lines)
+        return GazetteInsolvencyResult(
+            entity_name=entity_name,
+            notice_type_filter=notice_type,
+            start_date=start_date,
+            end_date=end_date,
+            total_notices=len(notice_models),
+            notices=notice_models,
+        )
