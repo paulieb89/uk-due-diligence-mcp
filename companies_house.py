@@ -10,17 +10,22 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from typing import Annotated, Any
 
-import httpx
 from pydantic import Field
 from fastmcp import FastMCP
 
-from http_client import (
-    _request_with_retry,
-    companies_house_client,
-    format_api_error,
+from http_client import _request_with_retry, companies_house_client
+from models import (
+    CompanyAccountsSummary,
+    CompanyConfirmationStatementSummary,
+    CompanyOfficer,
+    CompanyOfficersResult,
+    CompanyProfile,
+    CompanyPSCEntry,
+    CompanyPSCResult,
+    CompanySearchItem,
+    CompanySearchResult,
 )
 
 # ---------------------------------------------------------------------------
@@ -28,81 +33,34 @@ from http_client import (
 # ---------------------------------------------------------------------------
 HIGH_APPOINTMENT_COUNT = 10  # Directors with >= this many active appointments flagged
 
-
-def _flag(condition: bool, label: str) -> str:
-    return f"✅ {label}" if condition else f"🚩 {label}"
+# Jurisdictions within the UK that are NOT considered overseas for PSC
+# beneficial-ownership analysis.
+UK_JURISDICTIONS = {
+    "",
+    "ENGLAND AND WALES",
+    "SCOTLAND",
+    "NORTHERN IRELAND",
+    "WALES",
+    "ENGLAND",
+    "UNITED KINGDOM",
+}
 
 
 def _normalise_company_number(v: str) -> str:
     return v.zfill(8) if v.isdigit() else v.upper()
 
 
-# ---------------------------------------------------------------------------
-# Formatting helpers
-# ---------------------------------------------------------------------------
-
-def _format_company_summary(item: dict[str, Any]) -> str:
-    sic = ", ".join(item.get("sic_codes", [])) or "—"
-    return (
-        f"**{item.get('title', 'Unknown')}**\n"
-        f"  Number: {item.get('company_number', '—')}\n"
-        f"  Status: {item.get('company_status', '—')}\n"
-        f"  Type: {item.get('company_type', '—')}\n"
-        f"  SIC: {sic}\n"
-        f"  Incorporated: {item.get('date_of_creation', '—')}\n"
-        f"  Address: {_address_str(item.get('registered_office_address', {}))}\n"
-    )
-
-
-def _address_str(addr: dict[str, Any]) -> str:
-    parts = [
-        addr.get("address_line_1", ""),
-        addr.get("address_line_2", ""),
-        addr.get("locality", ""),
-        addr.get("postal_code", ""),
-        addr.get("country", ""),
-    ]
-    return ", ".join(p for p in parts if p)
-
-
-def _format_officer(o: dict[str, Any], idx: int) -> str:
-    name = o.get("name", "Unknown")
-    role = o.get("officer_role", "—")
-    appointed = o.get("appointed_on", "—")
-    resigned = o.get("resigned_on")
-    dob = o.get("date_of_birth", {})
-    dob_str = f"{dob.get('month', '?')}/{dob.get('year', '?')}" if dob else "—"
-    nationality = o.get("nationality", "—")
-    other_apps = o.get("appointment_count", 0)
-
-    risk = ""
-    if other_apps >= HIGH_APPOINTMENT_COUNT:
-        risk = f" 🚩 HIGH-APPOINTMENT-COUNT ({other_apps} total appointments)"
-
-    status = f"resigned {resigned}" if resigned else "active"
-    return (
-        f"{idx}. **{name}** ({role}) — {status}\n"
-        f"   Appointed: {appointed} | DOB: {dob_str} | Nationality: {nationality}\n"
-        f"   Other appointments: {other_apps}{risk}\n"
-    )
-
-
-def _format_psc_entry(p: dict[str, Any], idx: int) -> str:
-    kind = p.get("kind", "—")
-    name = p.get("name", "Unknown")
-    natures = ", ".join(p.get("natures_of_control", [])) or "—"
-    ceased = p.get("ceased_on")
-    notified = p.get("notified_on", "—")
-    nationality = p.get("nationality", "")
-    country = p.get("country_of_residence", "")
-
-    status = f"ceased {ceased}" if ceased else "active"
-    location = ", ".join(x for x in [nationality, country] if x) or "—"
-    return (
-        f"{idx}. **{name}** [{kind}] — {status}\n"
-        f"   Notified: {notified} | Location: {location}\n"
-        f"   Control: {natures}\n"
-    )
+def _truncate_natures(natures: list[str], max_chars: int) -> list[str]:
+    """Cap each nature-of-control entry to `max_chars`."""
+    out: list[str] = []
+    for n in natures:
+        if not isinstance(n, str):
+            continue
+        if len(n) > max_chars:
+            out.append(n[:max_chars] + " …[truncated]")
+        else:
+            out.append(n)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -128,15 +86,16 @@ def register_tools(mcp: FastMCP) -> None:
         query: Annotated[str, Field(description="Company name or keyword to search for", min_length=2, max_length=200)],
         company_status: Annotated[str | None, Field(description="Filter by company status (e.g. 'active', 'dissolved'). Omit to search all.")] = None,
         company_type: Annotated[str | None, Field(description="Filter by company type (e.g. 'ltd', 'llp'). Omit to search all.")] = None,
-        items_per_page: Annotated[int, Field(description="Number of results to return (max 100)", ge=1, le=100)] = 20,
-        start_index: Annotated[int, Field(description="Pagination offset", ge=0)] = 0,
-        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
-    ) -> str:
+        items_per_page: Annotated[int, Field(description="Number of results to return (max 100). Default 20.", ge=1, le=100)] = 20,
+        start_index: Annotated[int, Field(description="Pagination offset. Default 0.", ge=0, le=10000)] = 0,
+    ) -> CompanySearchResult:
         """Search the Companies House register by company name or keyword.
 
         Returns a paginated list of matching companies with name, number,
         status, SIC codes, incorporation date, and registered address.
-        Use company_profile for the full record once you have the company number.
+        Use company_profile for the full record once you have the company
+        number. Re-call with start_index=start_index+items_per_page to
+        fetch the next page.
         """
         qs: dict[str, Any] = {
             "q": query,
@@ -148,41 +107,38 @@ def register_tools(mcp: FastMCP) -> None:
         if company_type:
             qs["type"] = company_type
 
-        try:
-            async with companies_house_client() as client:
-                resp = await _request_with_retry(client, "GET", "/search/companies", params=qs)
-                data = resp.json()
-        except Exception as exc:
-            return format_api_error(exc, "company_search")
+        async with companies_house_client() as client:
+            resp = await _request_with_retry(client, "GET", "/search/companies", params=qs)
+            data = resp.json()
 
-        items = data.get("items", [])
-        total = data.get("total_results", 0)
-        has_more = (start_index + items_per_page) < total
+        raw_items = data.get("items", []) or []
+        total = int(data.get("total_results", 0) or 0)
 
-        if response_format == "json":
-            return json.dumps(
-                {
-                    "total_results": total,
-                    "returned": len(items),
-                    "start_index": start_index,
-                    "has_more": has_more,
-                    "items": items,
-                },
-                indent=2,
+        items = [
+            CompanySearchItem(
+                company_number=raw.get("company_number"),
+                title=raw.get("title"),
+                company_status=raw.get("company_status"),
+                company_type=raw.get("company_type"),
+                date_of_creation=raw.get("date_of_creation"),
+                sic_codes=list(raw.get("sic_codes") or []),
+                address=raw.get("registered_office_address") or {},
+                description=raw.get("description"),
             )
-
-        if not items:
-            return f"No companies found matching **{query}**."
-
-        lines = [
-            f"## Companies House Search: '{query}'\n",
-            f"**{total:,} total results** — showing {start_index + 1}–"
-            f"{start_index + len(items)} | "
-            f"{'More results available.' if has_more else 'End of results.'}\n",
+            for raw in raw_items
         ]
-        for item in items:
-            lines.append(_format_company_summary(item))
-        return "\n".join(lines)
+
+        has_more = (start_index + len(items)) < total
+
+        return CompanySearchResult(
+            query=query,
+            total_results=total,
+            start_index=start_index,
+            items_per_page=items_per_page,
+            returned=len(items),
+            has_more=has_more,
+            items=items,
+        )
 
     # ------------------------------------------------------------------ #
     # 2. company_profile
@@ -199,62 +155,48 @@ def register_tools(mcp: FastMCP) -> None:
     )
     async def company_profile(
         company_number: Annotated[str, Field(description="Companies House company number, e.g. '12345678' or 'SC123456'", min_length=6, max_length=10)],
-        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
-    ) -> str:
+    ) -> CompanyProfile:
         """Retrieve the full Companies House profile for a specific company number.
 
-        Returns corporate status, registered address, SIC codes, accounts and
-        confirmation statement status (overdue flags), charges count, and
-        incorporation date. Accounts overdue and high charge counts are early
-        distress signals.
+        Returns corporate status, registered address, SIC codes, accounts
+        and confirmation statement filing status (with overdue flags),
+        active-charges flag, and incorporation date. Accounts overdue and
+        active charges are early distress signals worth cross-referencing
+        with gazette_insolvency.
         """
         company_number = _normalise_company_number(company_number)
 
-        try:
-            async with companies_house_client() as client:
-                resp = await _request_with_retry(
-                    client, "GET", f"/company/{company_number}"
-                )
-                data = resp.json()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                return (
-                    f"Company number **{company_number}** not found in "
-                    "Companies House. Check the number and try again."
-                )
-            return format_api_error(exc, "company_profile")
-        except Exception as exc:
-            return format_api_error(exc, "company_profile")
+        async with companies_house_client() as client:
+            resp = await _request_with_retry(
+                client, "GET", f"/company/{company_number}"
+            )
+            data = resp.json()
 
-        if response_format == "json":
-            return json.dumps(data, indent=2)
+        accs_raw = data.get("accounts") or {}
+        conf_raw = data.get("confirmation_statement") or {}
 
-        # Signals
-        accs = data.get("accounts", {})
-        conf = data.get("confirmation_statement", {})
-        charges = data.get("has_charges", False)
-        accs_overdue = accs.get("overdue", False)
-        conf_overdue = conf.get("overdue", False)
-        last_accounts_made_up = accs.get("last_accounts", {}).get("made_up_to", "—")
-        next_accounts_due = accs.get("next_due", "—")
-        next_conf_due = conf.get("next_due", "—")
+        accounts = CompanyAccountsSummary(
+            overdue=bool(accs_raw.get("overdue", False)),
+            last_accounts_made_up_to=(accs_raw.get("last_accounts") or {}).get("made_up_to"),
+            next_due=accs_raw.get("next_due"),
+        )
+        confirmation = CompanyConfirmationStatementSummary(
+            overdue=bool(conf_raw.get("overdue", False)),
+            next_due=conf_raw.get("next_due"),
+        )
 
-        addr = _address_str(data.get("registered_office_address", {}))
-        sic = ", ".join(data.get("sic_codes", [])) or "—"
-
-        return (
-            f"## {data.get('company_name', 'Unknown')}\n"
-            f"**Number:** {data.get('company_number', '—')}  \n"
-            f"**Status:** {data.get('company_status', '—')}  \n"
-            f"**Type:** {data.get('company_type', '—')}  \n"
-            f"**Incorporated:** {data.get('date_of_creation', '—')}  \n"
-            f"**SIC Codes:** {sic}  \n"
-            f"**Registered Address:** {addr}  \n\n"
-            f"### Filing Compliance\n"
-            f"{_flag(not accs_overdue, 'Accounts')} — last made up to {last_accounts_made_up}, "
-            f"next due {next_accounts_due}  \n"
-            f"{_flag(not conf_overdue, 'Confirmation statement')} — next due {next_conf_due}  \n"
-            f"{'🚩 Has active charges registered' if charges else '✅ No charges registered'}  \n"
+        return CompanyProfile(
+            company_number=str(data.get("company_number") or company_number),
+            company_name=data.get("company_name"),
+            company_status=data.get("company_status"),
+            company_type=data.get("company_type"),
+            date_of_creation=data.get("date_of_creation"),
+            sic_codes=list(data.get("sic_codes") or []),
+            registered_office_address=data.get("registered_office_address") or {},
+            has_charges=bool(data.get("has_charges", False)),
+            accounts=accounts,
+            confirmation_statement=confirmation,
+            raw=data,
         )
 
     # ------------------------------------------------------------------ #
@@ -273,72 +215,65 @@ def register_tools(mcp: FastMCP) -> None:
     async def company_officers(
         company_number: Annotated[str, Field(description="Companies House company number", min_length=6, max_length=10)],
         include_resigned: Annotated[bool, Field(description="If true, include resigned officers alongside active ones")] = False,
-        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
-    ) -> str:
+        limit: Annotated[int, Field(description="Max officers to fetch from Companies House (upstream items_per_page). Default 100.", ge=1, le=100)] = 100,
+    ) -> CompanyOfficersResult:
         """List directors and officers for a Companies House company number.
 
         Returns names, roles, appointment dates, nationality, and total
-        appointment count. Directors with a high appointment count (>=10 other
-        companies) are flagged as a risk signal -- a common trait in nominee
-        director fraud and phoenix company structures.
+        appointment count. Directors with a high appointment count
+        (>=10 other companies) are flagged via
+        `high_appointment_count_flag` — a common trait in nominee director
+        fraud and phoenix company structures.
         """
         company_number = _normalise_company_number(company_number)
         # NB: do NOT use register_view=true — it requires a companion
         # register_type param and only returns data for the minority of
         # companies whose statutory register is held at Companies House.
         # Filter resigned officers client-side on `resigned_on` instead.
-        qs: dict[str, Any] = {"items_per_page": 100}
+        qs: dict[str, Any] = {"items_per_page": limit}
 
-        try:
-            async with companies_house_client() as client:
-                resp = await _request_with_retry(
-                    client, "GET",
-                    f"/company/{company_number}/officers",
-                    params=qs,
-                )
-                data = resp.json()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                return f"No officers found for company **{company_number}**."
-            return format_api_error(exc, "company_officers")
-        except Exception as exc:
-            return format_api_error(exc, "company_officers")
+        async with companies_house_client() as client:
+            resp = await _request_with_retry(
+                client, "GET",
+                f"/company/{company_number}/officers",
+                params=qs,
+            )
+            data = resp.json()
 
-        items = data.get("items", [])
+        raw_items = data.get("items", []) or []
         if not include_resigned:
-            items = [o for o in items if not o.get("resigned_on")]
-            total = len(items)
-        else:
-            total = data.get("total_results", 0)
+            raw_items = [o for o in raw_items if not o.get("resigned_on")]
 
-        if response_format == "json":
-            return json.dumps(
-                {"company_number": company_number, "total": total, "officers": items},
-                indent=2,
+        officers = [
+            CompanyOfficer(
+                name=raw.get("name"),
+                officer_role=raw.get("officer_role"),
+                appointed_on=raw.get("appointed_on"),
+                resigned_on=raw.get("resigned_on"),
+                nationality=raw.get("nationality"),
+                country_of_residence=raw.get("country_of_residence"),
+                occupation=raw.get("occupation"),
+                date_of_birth=raw.get("date_of_birth") or {},
+                appointment_count=int(raw.get("appointment_count", 0) or 0),
+                address=raw.get("address") or {},
+                links=raw.get("links") or {},
             )
-
-        if not items:
-            return f"No officers found for company **{company_number}**."
-
-        high_count_flags = [
-            o for o in items
-            if o.get("appointment_count", 0) >= HIGH_APPOINTMENT_COUNT and not o.get("resigned_on")
+            for raw in raw_items
         ]
 
-        lines = [
-            f"## Officers — {company_number}\n",
-            f"**{total} total officers** ({'including resigned' if include_resigned else 'active only'})\n",
-        ]
-        if high_count_flags:
-            lines.append(
-                f"🚩 **{len(high_count_flags)} director(s) with >={HIGH_APPOINTMENT_COUNT} appointments** "
-                "(nominee/phoenix risk signal)\n"
-            )
-        lines.append("")
-        for i, officer in enumerate(items, 1):
-            lines.append(_format_officer(officer, i))
+        high_count_flags = sum(
+            1
+            for o in officers
+            if o.appointment_count >= HIGH_APPOINTMENT_COUNT and not o.resigned_on
+        )
 
-        return "\n".join(lines)
+        return CompanyOfficersResult(
+            company_number=company_number,
+            include_resigned=include_resigned,
+            total=len(officers),
+            high_appointment_count_flag=high_count_flags,
+            officers=officers,
+        )
 
     # ------------------------------------------------------------------ #
     # 4. company_psc
@@ -355,64 +290,59 @@ def register_tools(mcp: FastMCP) -> None:
     )
     async def company_psc(
         company_number: Annotated[str, Field(description="Companies House company number", min_length=6, max_length=10)],
-        response_format: Annotated[str, Field(description="Output format: 'markdown' or 'json'")] = "markdown",
-    ) -> str:
+        max_nature_chars: Annotated[int, Field(description="Per-entry cap on each 'nature of control' descriptor. Upstream entries are sometimes long legal text. Default 300.", ge=50, le=5000)] = 300,
+    ) -> CompanyPSCResult:
         """Retrieve Persons with Significant Control (PSC) for a company.
 
-        PSC data reveals beneficial ownership -- individuals or corporate entities
-        holding >25% shares, voting rights, or appointment power. Corporate PSC
-        entries with overseas registration addresses are a key flag in beneficial
-        ownership investigations.
+        PSC data reveals beneficial ownership — individuals or corporate
+        entities holding >25% shares, voting rights, or appointment power.
+        Corporate PSC entries with overseas registration addresses are a
+        key flag in beneficial ownership investigations and surface as
+        `overseas_corporate_psc_flag` on the response.
         """
         company_number = _normalise_company_number(company_number)
 
-        try:
-            async with companies_house_client() as client:
-                resp = await _request_with_retry(
-                    client, "GET",
-                    f"/company/{company_number}/persons-with-significant-control",
-                )
-                data = resp.json()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
-                return f"No PSC data found for company **{company_number}**."
-            return format_api_error(exc, "company_psc")
-        except Exception as exc:
-            return format_api_error(exc, "company_psc")
-
-        items = data.get("items", [])
-        total = data.get("total_results", 0)
-
-        if response_format == "json":
-            return json.dumps(
-                {"company_number": company_number, "total": total, "psc": items},
-                indent=2,
+        async with companies_house_client() as client:
+            resp = await _request_with_retry(
+                client, "GET",
+                f"/company/{company_number}/persons-with-significant-control",
             )
+            data = resp.json()
 
-        if not items:
-            return (
-                f"No PSC entries for **{company_number}**. "
-                "This may indicate exempt status or an unresolved exemption notice."
+        raw_items = data.get("items", []) or []
+        total = int(data.get("total_results", len(raw_items)) or 0)
+
+        psc_entries: list[CompanyPSCEntry] = []
+        overseas_flag = 0
+        for raw in raw_items:
+            natures = _truncate_natures(
+                list(raw.get("natures_of_control") or []),
+                max_nature_chars,
             )
-
-        overseas_flags = [
-            p for p in items
-            if p.get("kind") in ("corporate-entity-person-with-significant-control",
-                                  "legal-person-person-with-significant-control")
-            and p.get("identification", {}).get("place_registered", "").upper()
-            not in ("", "ENGLAND AND WALES", "SCOTLAND", "NORTHERN IRELAND", "WALES", "ENGLAND")
-        ]
-
-        lines = [
-            f"## Persons with Significant Control — {company_number}\n",
-            f"**{total} PSC entries**\n",
-        ]
-        if overseas_flags:
-            lines.append(
-                f"🚩 **{len(overseas_flags)} overseas corporate PSC(s)** — beneficial ownership chain extends offshore\n"
+            entry = CompanyPSCEntry(
+                kind=raw.get("kind"),
+                name=raw.get("name"),
+                notified_on=raw.get("notified_on"),
+                ceased_on=raw.get("ceased_on"),
+                nationality=raw.get("nationality"),
+                country_of_residence=raw.get("country_of_residence"),
+                natures_of_control=natures,
+                identification=raw.get("identification") or {},
+                address=raw.get("address") or {},
             )
-        lines.append("")
-        for i, psc in enumerate(items, 1):
-            lines.append(_format_psc_entry(psc, i))
+            psc_entries.append(entry)
 
-        return "\n".join(lines)
+            if entry.kind in (
+                "corporate-entity-person-with-significant-control",
+                "legal-person-person-with-significant-control",
+            ):
+                place = (entry.identification.get("place_registered") or "").upper()
+                if place not in UK_JURISDICTIONS:
+                    overseas_flag += 1
+
+        return CompanyPSCResult(
+            company_number=company_number,
+            total=total,
+            overseas_corporate_psc_flag=overseas_flag,
+            psc=psc_entries,
+        )
