@@ -29,12 +29,6 @@ BASE_CFG = ConfigDict(
 # Shared enums
 # ---------------------------------------------------------------------------
 
-class ResponseFormat(str, Enum):
-    """Output format preference."""
-    MARKDOWN = "markdown"
-    JSON = "json"
-
-
 class CompanyStatus(str, Enum):
     """Companies House entity status filter."""
     ACTIVE = "active"
@@ -110,10 +104,6 @@ class CompanySearchInput(BaseModel):
         description="Pagination offset — number of results to skip",
         ge=0,
     )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' for human-readable, 'json' for structured data",
-    )
 
 
 class CompanyProfileInput(BaseModel):
@@ -125,10 +115,6 @@ class CompanyProfileInput(BaseModel):
         description="Companies House company number, e.g. '12345678' or 'SC123456'",
         min_length=6,
         max_length=10,
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
     )
 
     @field_validator("company_number")
@@ -154,10 +140,6 @@ class CompanyOfficersInput(BaseModel):
         default=False,
         description="If true, include resigned officers alongside active ones",
     )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
-    )
 
     @field_validator("company_number")
     @classmethod
@@ -176,10 +158,6 @@ class CompanyPSCInput(BaseModel):
         description="Companies House company number",
         min_length=6,
         max_length=10,
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
     )
 
     @field_validator("company_number")
@@ -219,10 +197,6 @@ class CharitySearchInput(BaseModel):
         description="Page number for pagination (1-indexed)",
         ge=1,
     )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
-    )
 
 
 class CharityProfileInput(BaseModel):
@@ -234,10 +208,6 @@ class CharityProfileInput(BaseModel):
         description="Charity Commission registration number, e.g. '1234567' or '1234567-1' for a subsidiary",
         min_length=6,
         max_length=12,
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
     )
 
 
@@ -258,10 +228,6 @@ class LandTitleSearchInput(BaseModel):
         ),
         min_length=4,
         max_length=200,
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
     )
 
 
@@ -298,10 +264,6 @@ class GazetteInsolvencyInput(BaseModel):
         description="Filter notices up to this date (ISO format: YYYY-MM-DD, e.g. '2024-12-31')",
         pattern=r"^\d{4}-\d{2}-\d{2}$",
     )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -321,10 +283,6 @@ class VATValidateInput(BaseModel):
         ),
         min_length=9,
         max_length=15,
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
     )
 
     @field_validator("vat_number")
@@ -380,10 +338,6 @@ class EntityDueDiligenceInput(BaseModel):
             "If true, also search the Charity Commission register for this entity name. "
             "Useful for organisations that operate as both a company and a charity."
         ),
-    )
-    response_format: ResponseFormat = Field(
-        default=ResponseFormat.MARKDOWN,
-        description="Output format: 'markdown' or 'json'",
     )
 
     @field_validator("company_number")
