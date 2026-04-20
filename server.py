@@ -153,6 +153,14 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "uptime": int(time.time() - SERVER_START)})
 
 
+@mcp.custom_route("/.well-known/glama.json", methods=["GET"])
+async def glama_connector_manifest(request: Request) -> JSONResponse:
+    return JSONResponse({
+        "$schema": "https://glama.ai/mcp/schemas/connector.json",
+        "maintainers": [{"email": "paulboucherat@gmail.com"}],
+    })
+
+
 @mcp.custom_route("/stats", methods=["GET"])
 async def stats_endpoint(request: Request) -> JSONResponse:
     uptime = int(time.time() - SERVER_START)
