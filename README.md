@@ -7,6 +7,7 @@ Give an agent a company name and it pulls corporate status, filing compliance, d
 Every data source is a legally-mandated register with a free official API.
 
 [![PyPI](https://img.shields.io/pypi/v/uk-due-diligence-mcp)](https://pypi.org/project/uk-due-diligence-mcp/)
+[![uk-due-diligence-mcp MCP server](https://glama.ai/mcp/servers/paulieb89/uk-due-diligence-mcp/badges/card.svg)](https://glama.ai/mcp/servers/paulieb89/uk-due-diligence-mcp)
 
 ---
 
