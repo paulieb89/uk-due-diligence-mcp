@@ -138,6 +138,34 @@ def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
+        name="gazette_notice",
+        annotations={
+            "title": "Get Gazette Notice Full Text",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def gazette_notice(
+        notice_id: Annotated[str, Field(
+            description="Numeric Gazette notice ID. Returned as notice_numeric_id by gazette_insolvency.",
+            min_length=1, max_length=20,
+        )],
+    ) -> dict:
+        """Fetch the full legal wording of a Gazette notice by numeric notice ID.
+
+        Returns the complete JSON-LD linked-data record for the notice: parties,
+        legal basis, court, and full text. Use gazette_insolvency first to find
+        notice_numeric_id values.
+        """
+        url = f"https://www.thegazette.co.uk/notice/{notice_id.strip()}/data.json?view=linked-data"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+            resp.raise_for_status()
+            return resp.json()
+
+    @mcp.tool(
         name="gazette_insolvency",
         annotations={
             "title": "Search Gazette Corporate Insolvency Notices",
