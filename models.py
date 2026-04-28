@@ -306,6 +306,13 @@ class CompanyPSCResult(BaseModel):
         default_factory=list,
         description="Persons with Significant Control records.",
     )
+    note: str | None = Field(
+        None,
+        description=(
+            "Explanatory note when total=0. Typical for widely-held listed PLCs "
+            "where no single person or entity holds 25%+ of shares or voting rights."
+        ),
+    )
 
 
 # =============================================================================

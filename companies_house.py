@@ -67,6 +67,146 @@ def _truncate_natures(natures: list[str], max_chars: int) -> list[str]:
 # Tool registration
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Shared fetch helpers (used by both tools and resources)
+# ---------------------------------------------------------------------------
+
+async def _fetch_company_profile(company_number: str) -> CompanyProfile:
+    async with companies_house_client() as client:
+        resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
+        data = resp.json()
+
+        has_charges = False
+        try:
+            charges_resp = await _request_with_retry(
+                client, "GET", f"/company/{company_number}/charges",
+                params={"items_per_page": 1},
+            )
+            charges_data = charges_resp.json()
+            charges_items = charges_data.get("items") or []
+            has_charges = any(
+                item.get("status") == "outstanding" for item in charges_items
+            ) or (
+                charges_data.get("total_count", 0) > 0
+                and not charges_items
+            )
+        except Exception:
+            pass
+
+    accs_raw = data.get("accounts") or {}
+    conf_raw = data.get("confirmation_statement") or {}
+
+    return CompanyProfile(
+        company_number=str(data.get("company_number") or company_number),
+        company_name=data.get("company_name"),
+        company_status=data.get("company_status"),
+        company_type=data.get("company_type"),
+        date_of_creation=data.get("date_of_creation"),
+        sic_codes=list(data.get("sic_codes") or []),
+        registered_office_address=data.get("registered_office_address") or {},
+        has_charges=has_charges,
+        accounts=CompanyAccountsSummary(
+            overdue=bool(accs_raw.get("overdue", False)),
+            last_accounts_made_up_to=(accs_raw.get("last_accounts") or {}).get("made_up_to"),
+            next_due=accs_raw.get("next_due"),
+        ),
+        confirmation_statement=CompanyConfirmationStatementSummary(
+            overdue=bool(conf_raw.get("overdue", False)),
+            next_due=conf_raw.get("next_due"),
+        ),
+    )
+
+
+async def _fetch_company_officers(company_number: str) -> CompanyOfficersResult:
+    async with companies_house_client() as client:
+        resp = await _request_with_retry(
+            client, "GET",
+            f"/company/{company_number}/officers",
+            params={"items_per_page": 100},
+        )
+        data = resp.json()
+
+    raw_items = [o for o in (data.get("items", []) or []) if not o.get("resigned_on")]
+    officers = [
+        CompanyOfficer(
+            name=raw.get("name"),
+            officer_role=raw.get("officer_role"),
+            appointed_on=raw.get("appointed_on"),
+            resigned_on=raw.get("resigned_on"),
+            nationality=raw.get("nationality"),
+            country_of_residence=raw.get("country_of_residence"),
+            occupation=raw.get("occupation"),
+            date_of_birth=raw.get("date_of_birth") or {},
+            appointment_count=None,
+            address=raw.get("address") or {},
+            links=raw.get("links") or {},
+        )
+        for raw in raw_items
+    ]
+    return CompanyOfficersResult(
+        company_number=company_number,
+        include_resigned=False,
+        total=len(officers),
+        high_appointment_count_flag=None,
+        officers=officers,
+    )
+
+
+async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
+    async with companies_house_client() as client:
+        resp = await _request_with_retry(
+            client, "GET",
+            f"/company/{company_number}/persons-with-significant-control",
+        )
+        data = resp.json()
+
+    raw_items = data.get("items", []) or []
+    total = int(data.get("total_results", len(raw_items)) or 0)
+
+    psc_entries: list[CompanyPSCEntry] = []
+    overseas_flag = 0
+    for raw in raw_items:
+        natures = _truncate_natures(list(raw.get("natures_of_control") or []), 300)
+        entry = CompanyPSCEntry(
+            kind=raw.get("kind"),
+            name=raw.get("name"),
+            notified_on=raw.get("notified_on"),
+            ceased_on=raw.get("ceased_on"),
+            nationality=raw.get("nationality"),
+            country_of_residence=raw.get("country_of_residence"),
+            natures_of_control=natures,
+            identification=raw.get("identification") or {},
+            address=raw.get("address") or {},
+        )
+        psc_entries.append(entry)
+
+        if entry.kind in (
+            "corporate-entity-person-with-significant-control",
+            "legal-person-person-with-significant-control",
+        ):
+            place = (entry.identification.get("place_registered") or "").upper()
+            if place not in UK_JURISDICTIONS:
+                overseas_flag += 1
+
+    note = None
+    if total == 0:
+        note = (
+            "No registrable PSC. Typical for widely-held listed PLCs where "
+            "no single person or entity holds 25%+ of shares or voting rights."
+        )
+    return CompanyPSCResult(
+        company_number=company_number,
+        total=total,
+        overseas_corporate_psc_flag=overseas_flag,
+        psc=psc_entries,
+        note=note,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tool registration
+# ---------------------------------------------------------------------------
+
 def register_tools(mcp: FastMCP) -> None:
 
     # ------------------------------------------------------------------ #
@@ -140,6 +280,80 @@ def register_tools(mcp: FastMCP) -> None:
             items=items,
         )
 
+    # ------------------------------------------------------------------ #
+    # 2. company_profile
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="company_profile",
+        annotations={
+            "title": "Get Company Profile",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def company_profile(
+        company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+    ) -> CompanyProfile:
+        """Fetch the full Companies House profile for a company number.
+
+        Returns status, registered address, SIC codes, filing compliance
+        (overdue accounts and confirmation statement flags), and whether
+        the company has outstanding charges. Use company_search first to
+        find the company number.
+        """
+        return await _fetch_company_profile(_normalise_company_number(company_number))
+
+    # ------------------------------------------------------------------ #
+    # 3. company_officers
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="company_officers",
+        annotations={
+            "title": "Get Company Officers",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def company_officers(
+        company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+    ) -> CompanyOfficersResult:
+        """Fetch active officers for a Companies House company number.
+
+        Returns directors, secretaries, and other active officers with
+        appointment dates, nationality, and country of residence.
+        Resigned officers are excluded.
+        """
+        return await _fetch_company_officers(_normalise_company_number(company_number))
+
+    # ------------------------------------------------------------------ #
+    # 4. company_psc
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="company_psc",
+        annotations={
+            "title": "Get Persons with Significant Control",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def company_psc(
+        company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+    ) -> CompanyPSCResult:
+        """Fetch Persons with Significant Control (beneficial ownership) for a company.
+
+        Returns PSC entries with natures of control, nationality, and
+        country of residence. Flags overseas corporate PSC entries as a
+        beneficial ownership risk signal. Returns an explanatory note for
+        widely-held PLCs with no registrable PSC.
+        """
+        return await _fetch_company_psc(_normalise_company_number(company_number))
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -157,58 +371,8 @@ def register_resources(mcp: FastMCP) -> None:
         mime_type="application/json",
     )
     async def company_profile_resource(company_number: str) -> str:
-        company_number = _normalise_company_number(company_number)
-
-        async with companies_house_client() as client:
-            resp = await _request_with_retry(
-                client, "GET", f"/company/{company_number}"
-            )
-            data = resp.json()
-
-            # has_charges in the profile response is unreliable — fetch charges
-            # separately and check for outstanding items.
-            has_charges = False
-            try:
-                charges_resp = await _request_with_retry(
-                    client, "GET", f"/company/{company_number}/charges",
-                    params={"items_per_page": 1},
-                )
-                charges_data = charges_resp.json()
-                charges_items = charges_data.get("items") or []
-                has_charges = any(
-                    item.get("status") == "outstanding" for item in charges_items
-                ) or (
-                    charges_data.get("total_count", 0) > 0
-                    and not charges_items  # items omitted means counts are non-zero
-                )
-            except Exception:
-                pass  # charges endpoint failure is non-fatal
-
-        accs_raw = data.get("accounts") or {}
-        conf_raw = data.get("confirmation_statement") or {}
-
-        accounts = CompanyAccountsSummary(
-            overdue=bool(accs_raw.get("overdue", False)),
-            last_accounts_made_up_to=(accs_raw.get("last_accounts") or {}).get("made_up_to"),
-            next_due=accs_raw.get("next_due"),
-        )
-        confirmation = CompanyConfirmationStatementSummary(
-            overdue=bool(conf_raw.get("overdue", False)),
-            next_due=conf_raw.get("next_due"),
-        )
-
-        return CompanyProfile(
-            company_number=str(data.get("company_number") or company_number),
-            company_name=data.get("company_name"),
-            company_status=data.get("company_status"),
-            company_type=data.get("company_type"),
-            date_of_creation=data.get("date_of_creation"),
-            sic_codes=list(data.get("sic_codes") or []),
-            registered_office_address=data.get("registered_office_address") or {},
-            has_charges=has_charges,
-            accounts=accounts,
-            confirmation_statement=confirmation,
-        ).model_dump_json()
+        result = await _fetch_company_profile(_normalise_company_number(company_number))
+        return result.model_dump_json()
 
     @mcp.resource(
         "company://{company_number}/officers",
@@ -220,45 +384,8 @@ def register_resources(mcp: FastMCP) -> None:
         mime_type="application/json",
     )
     async def company_officers_resource(company_number: str) -> str:
-        company_number = _normalise_company_number(company_number)
-        # NB: do NOT use register_view=true — it requires a companion
-        # register_type param and only returns data for the minority of
-        # companies whose statutory register is held at Companies House.
-        # Filter resigned officers client-side on `resigned_on` instead.
-        async with companies_house_client() as client:
-            resp = await _request_with_retry(
-                client, "GET",
-                f"/company/{company_number}/officers",
-                params={"items_per_page": 100},
-            )
-            data = resp.json()
-
-        raw_items = [o for o in (data.get("items", []) or []) if not o.get("resigned_on")]
-
-        officers = [
-            CompanyOfficer(
-                name=raw.get("name"),
-                officer_role=raw.get("officer_role"),
-                appointed_on=raw.get("appointed_on"),
-                resigned_on=raw.get("resigned_on"),
-                nationality=raw.get("nationality"),
-                country_of_residence=raw.get("country_of_residence"),
-                occupation=raw.get("occupation"),
-                date_of_birth=raw.get("date_of_birth") or {},
-                appointment_count=None,
-                address=raw.get("address") or {},
-                links=raw.get("links") or {},
-            )
-            for raw in raw_items
-        ]
-
-        return CompanyOfficersResult(
-            company_number=company_number,
-            include_resigned=False,
-            total=len(officers),
-            high_appointment_count_flag=None,
-            officers=officers,
-        ).model_dump_json()
+        result = await _fetch_company_officers(_normalise_company_number(company_number))
+        return result.model_dump_json()
 
     @mcp.resource(
         "company://{company_number}/psc",
@@ -270,54 +397,5 @@ def register_resources(mcp: FastMCP) -> None:
         mime_type="application/json",
     )
     async def company_psc_resource(company_number: str) -> str:
-        company_number = _normalise_company_number(company_number)
-
-        async with companies_house_client() as client:
-            resp = await _request_with_retry(
-                client, "GET",
-                f"/company/{company_number}/persons-with-significant-control",
-            )
-            data = resp.json()
-
-        raw_items = data.get("items", []) or []
-        total = int(data.get("total_results", len(raw_items)) or 0)
-
-        psc_entries: list[CompanyPSCEntry] = []
-        overseas_flag = 0
-        for raw in raw_items:
-            natures = _truncate_natures(list(raw.get("natures_of_control") or []), 300)
-            entry = CompanyPSCEntry(
-                kind=raw.get("kind"),
-                name=raw.get("name"),
-                notified_on=raw.get("notified_on"),
-                ceased_on=raw.get("ceased_on"),
-                nationality=raw.get("nationality"),
-                country_of_residence=raw.get("country_of_residence"),
-                natures_of_control=natures,
-                identification=raw.get("identification") or {},
-                address=raw.get("address") or {},
-            )
-            psc_entries.append(entry)
-
-            if entry.kind in (
-                "corporate-entity-person-with-significant-control",
-                "legal-person-person-with-significant-control",
-            ):
-                place = (entry.identification.get("place_registered") or "").upper()
-                if place not in UK_JURISDICTIONS:
-                    overseas_flag += 1
-
-        result = CompanyPSCResult(
-            company_number=company_number,
-            total=total,
-            overseas_corporate_psc_flag=overseas_flag,
-            psc=psc_entries,
-        )
-        if total == 0:
-            return (
-                f'{{"company_number":"{company_number}","total":0,'
-                f'"overseas_corporate_psc_flag":0,"psc":[],'
-                f'"note":"No registrable PSC. Typical for widely-held listed PLCs where '
-                f'no single person or entity holds 25%+ of shares or voting rights."}}'
-            )
+        result = await _fetch_company_psc(_normalise_company_number(company_number))
         return result.model_dump_json()

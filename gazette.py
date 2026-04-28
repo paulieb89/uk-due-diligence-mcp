@@ -152,7 +152,7 @@ def register_tools(mcp: FastMCP) -> None:
         notice_type: Annotated[str | None, Field(description="Filter by notice code (e.g. '2441' winding-up petition, '2443' winding-up order, '2448' administration order, '2460' striking-off). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
-        max_notices: Annotated[int, Field(description="Global cap on total notices returned across all codes, after severity/date sort. Default 20. Raise up to 140 (14 codes × 10) to see the full result set.", ge=1, le=140)] = 20,
+        max_notices: Annotated[int, Field(description="Cap on notices returned, applied after severity/date sort. Default 20. The Gazette insolvency feed returns up to 100 results per search — raise to 100 to see the full set.", ge=1, le=100)] = 20,
     ) -> GazetteInsolvencyResult:
         """Search The Gazette's insolvency notice index by entity name.
 

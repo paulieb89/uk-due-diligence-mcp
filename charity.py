@@ -3,7 +3,7 @@ Charity Commission API tools.
 
 Covers:
   - charity_search   (tool)     -> search by name/keyword
-  - charity_profile  (resource) -> full charity record with trustees, finances, filing history
+  - charity_profile  (tool + resource) -> full charity record with trustees, finances, filing history
 """
 
 from __future__ import annotations
@@ -114,10 +114,95 @@ def register_tools(mcp: FastMCP) -> None:
             charities=items,
         )
 
+    @mcp.tool(
+        name="charity_profile",
+        annotations={
+            "title": "Get Charity Profile",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def charity_profile(
+        charity_number: Annotated[str, Field(description="Charity Commission registration number (e.g. '1234567'). Returned by charity_search.", min_length=1, max_length=20)],
+    ) -> CharityProfile:
+        """Fetch the full Charity Commission profile for a charity number.
+
+        Returns trustees, latest income/expenditure, insolvency flags,
+        governing document type, classifications, and countries of operation.
+        Use charity_search first to find the charity number.
+        """
+        return await _fetch_charity_profile(charity_number)
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
 # ---------------------------------------------------------------------------
+# Shared fetch helper
+# ---------------------------------------------------------------------------
+
+async def _fetch_charity_profile(charity_number: str) -> CharityProfile:
+    async with charity_client() as client:
+        suffix = "0"
+        lookup_number = charity_number
+        if "-" in charity_number:
+            parts = charity_number.split("-", 1)
+            lookup_number = parts[0]
+            suffix = parts[1]
+        resp = await _request_with_retry(
+            client, "GET",
+            f"/allcharitydetailsV2/{lookup_number}/{suffix}",
+        )
+        data = resp.json()
+
+    reg_num = str(data.get("reg_charity_number") or lookup_number)
+    raw_status = data.get("reg_status")
+
+    raw_trustees = data.get("trustee_names") or []
+    trustees_total = len(raw_trustees)
+    trustees = [
+        CharityTrustee(trustee_name=t.get("trustee_name"))
+        for t in raw_trustees[:30]
+        if isinstance(t, dict)
+    ]
+
+    raw_www = data.get("who_what_where") or []
+    www_total = len(raw_www)
+    classifications = [
+        CharityClassification(
+            classification_type=w.get("classification_type"),
+            classification_desc=w.get("classification_desc"),
+        )
+        for w in raw_www[:50]
+        if isinstance(w, dict)
+    ]
+
+    countries_raw = data.get("CharityAoOCountryContinent") or []
+    countries = [c.get("country") for c in countries_raw[:10] if isinstance(c, dict) and c.get("country")]
+
+    return CharityProfile(
+        charity_number=reg_num,
+        charity_name=data.get("charity_name"),
+        reg_status=raw_status,
+        reg_status_label=_STATUS_LABELS.get(raw_status or "", raw_status),
+        charity_type=data.get("charity_type"),
+        charity_co_reg_number=data.get("charity_co_reg_number") or None,
+        date_of_registration=(data.get("date_of_registration") or "")[:10] or None,
+        address=_build_address(data),
+        latest_income=_coerce_number(data.get("latest_income")),
+        latest_expenditure=_coerce_number(data.get("latest_expenditure")),
+        insolvent=bool(data.get("insolvent", False)),
+        in_administration=bool(data.get("in_administration", False)),
+        trustee_names=trustees,
+        trustee_names_truncated=trustees_total > 30,
+        trustee_names_total=trustees_total,
+        who_what_where=classifications,
+        who_what_where_truncated=www_total > 50,
+        who_what_where_total=www_total,
+        countries_of_operation=countries,
+    )
+
 
 def register_resources(mcp: FastMCP) -> None:
 
@@ -131,68 +216,5 @@ def register_resources(mcp: FastMCP) -> None:
         mime_type="application/json",
     )
     async def charity_profile_resource(charity_number: str) -> str:
-        async with charity_client() as client:
-            # allcharitydetailsV2/{RegNumber}/{suffix} — suffix 0 = main charity
-            suffix = "0"
-            lookup_number = charity_number
-            if "-" in charity_number:
-                parts = charity_number.split("-", 1)
-                lookup_number = parts[0]
-                suffix = parts[1]
-            resp = await _request_with_retry(
-                client, "GET",
-                f"/allcharitydetailsV2/{lookup_number}/{suffix}",
-            )
-            data = resp.json()
-
-        reg_num = str(data.get("reg_charity_number") or lookup_number)
-        raw_status = data.get("reg_status")
-
-        # Trustees — cap at default 30
-        raw_trustees = data.get("trustee_names") or []
-        trustees_total = len(raw_trustees)
-        trustees_truncated = trustees_total > 30
-        trustees = [
-            CharityTrustee(trustee_name=t.get("trustee_name"))
-            for t in raw_trustees[:30]
-            if isinstance(t, dict)
-        ]
-
-        # Who/What/Where classifications — cap at default 50
-        raw_www = data.get("who_what_where") or []
-        www_total = len(raw_www)
-        www_truncated = www_total > 50
-        classifications = [
-            CharityClassification(
-                classification_type=w.get("classification_type"),
-                classification_desc=w.get("classification_desc"),
-            )
-            for w in raw_www[:50]
-            if isinstance(w, dict)
-        ]
-
-        # Countries of operation — upstream is already truncated to 10
-        countries_raw = data.get("CharityAoOCountryContinent") or []
-        countries = [c.get("country") for c in countries_raw[:10] if isinstance(c, dict) and c.get("country")]
-
-        return CharityProfile(
-            charity_number=reg_num,
-            charity_name=data.get("charity_name"),
-            reg_status=raw_status,
-            reg_status_label=_STATUS_LABELS.get(raw_status or "", raw_status),
-            charity_type=data.get("charity_type"),
-            charity_co_reg_number=data.get("charity_co_reg_number") or None,
-            date_of_registration=(data.get("date_of_registration") or "")[:10] or None,
-            address=_build_address(data),
-            latest_income=_coerce_number(data.get("latest_income")),
-            latest_expenditure=_coerce_number(data.get("latest_expenditure")),
-            insolvent=bool(data.get("insolvent", False)),
-            in_administration=bool(data.get("in_administration", False)),
-            trustee_names=trustees,
-            trustee_names_truncated=trustees_truncated,
-            trustee_names_total=trustees_total,
-            who_what_where=classifications,
-            who_what_where_truncated=www_truncated,
-            who_what_where_total=www_total,
-            countries_of_operation=countries,
-        ).model_dump_json()
+        result = await _fetch_charity_profile(charity_number)
+        return result.model_dump_json()

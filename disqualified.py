@@ -3,7 +3,7 @@ Disqualified Directors tools.
 
 Covers:
   - disqualified_search   (tool)     -> search disqualified officers by name
-  - disqualified_profile  (resource) -> full disqualification record by officer ID
+  - disqualified_profile  (tool + resource) -> full disqualification record by officer ID
 
 Uses the same Companies House REST API and API key as companies_house.py.
 """
@@ -102,6 +102,98 @@ def register_tools(mcp: FastMCP) -> None:
             items=items,
         )
 
+    @mcp.tool(
+        name="disqualified_profile",
+        annotations={
+            "title": "Get Disqualified Director Profile",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def disqualified_profile(
+        officer_id: Annotated[str, Field(description="Companies House officer ID. Returned by disqualified_search.", min_length=1, max_length=100)],
+    ) -> DisqualifiedProfile:
+        """Fetch the full disqualification record for a director by officer ID.
+
+        Returns all disqualification orders: reason, Act/section cited,
+        disqualification period, and associated company names. Use
+        disqualified_search first to find the officer ID.
+        """
+        return await _fetch_disqualified_profile(officer_id)
+
+
+# ---------------------------------------------------------------------------
+# Shared fetch helper
+# ---------------------------------------------------------------------------
+
+async def _fetch_disqualified_profile(officer_id: str) -> DisqualifiedProfile:
+    oid = officer_id.strip()
+    data: dict[str, Any] | None = None
+    officer_kind = "natural"
+
+    for kind, endpoint in [
+        ("natural", f"/disqualified-officers/natural/{oid}"),
+        ("corporate", f"/disqualified-officers/corporate/{oid}"),
+    ]:
+        try:
+            async with companies_house_client() as client:
+                resp = await _request_with_retry(client, "GET", endpoint)
+                data = resp.json()
+                officer_kind = kind
+                break
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                continue
+            raise
+
+    if data is None:
+        raise LookupError(
+            f"No disqualification record found for officer ID {oid!r}."
+        )
+
+    raw_orders = data.get("disqualifications", []) or []
+    orders: list[DisqualificationOrder] = []
+    for raw in raw_orders:
+        company_names = list(raw.get("company_names") or [])
+        total_companies = len(company_names)
+        truncated = total_companies > 20
+        if truncated:
+            company_names = company_names[:20]
+
+        orders.append(
+            DisqualificationOrder(
+                disqualified_from=raw.get("disqualified_from"),
+                disqualified_until=raw.get("disqualified_until"),
+                reason=raw.get("reason") or {},
+                company_names=company_names,
+                company_names_truncated=truncated,
+                company_names_total=total_companies,
+                address=raw.get("address") or {},
+                case_identifier=raw.get("case_identifier"),
+                heard_on=raw.get("heard_on"),
+                last_variation=raw.get("last_variation") or {},
+                undertaken_on=raw.get("undertaken_on"),
+            )
+        )
+
+    forename = data.get("forename") or None
+    surname = data.get("surname") or None
+    composed = " ".join(p for p in [forename, surname] if p).strip() or None
+    name = composed or data.get("name")
+
+    return DisqualifiedProfile(
+        officer_id=oid,
+        officer_kind=officer_kind,
+        name=name,
+        forename=forename,
+        surname=surname,
+        date_of_birth=data.get("date_of_birth"),
+        nationality=data.get("nationality"),
+        disqualifications=orders,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -119,67 +211,5 @@ def register_resources(mcp: FastMCP) -> None:
         mime_type="application/json",
     )
     async def disqualified_profile_resource(officer_id: str) -> str:
-        oid = officer_id.strip()
-        data: dict[str, Any] | None = None
-        officer_kind = "natural"
-
-        for kind, endpoint in [
-            ("natural", f"/disqualified-officers/natural/{oid}"),
-            ("corporate", f"/disqualified-officers/corporate/{oid}"),
-        ]:
-            try:
-                async with companies_house_client() as client:
-                    resp = await _request_with_retry(client, "GET", endpoint)
-                    data = resp.json()
-                    officer_kind = kind
-                    break
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404:
-                    continue
-                raise
-
-        if data is None:
-            raise LookupError(
-                f"No disqualification record found for officer ID {oid!r}."
-            )
-
-        raw_orders = data.get("disqualifications", []) or []
-        orders: list[DisqualificationOrder] = []
-        for raw in raw_orders:
-            company_names = list(raw.get("company_names") or [])
-            total_companies = len(company_names)
-            truncated = total_companies > 20
-            if truncated:
-                company_names = company_names[:20]
-
-            orders.append(
-                DisqualificationOrder(
-                    disqualified_from=raw.get("disqualified_from"),
-                    disqualified_until=raw.get("disqualified_until"),
-                    reason=raw.get("reason") or {},
-                    company_names=company_names,
-                    company_names_truncated=truncated,
-                    company_names_total=total_companies,
-                    address=raw.get("address") or {},
-                    case_identifier=raw.get("case_identifier"),
-                    heard_on=raw.get("heard_on"),
-                    last_variation=raw.get("last_variation") or {},
-                    undertaken_on=raw.get("undertaken_on"),
-                )
-            )
-
-        forename = data.get("forename") or None
-        surname = data.get("surname") or None
-        composed = " ".join(p for p in [forename, surname] if p).strip() or None
-        name = composed or data.get("name")
-
-        return DisqualifiedProfile(
-            officer_id=oid,
-            officer_kind=officer_kind,
-            name=name,
-            forename=forename,
-            surname=surname,
-            date_of_birth=data.get("date_of_birth"),
-            nationality=data.get("nationality"),
-            disqualifications=orders,
-        ).model_dump_json()
+        result = await _fetch_disqualified_profile(officer_id)
+        return result.model_dump_json()
