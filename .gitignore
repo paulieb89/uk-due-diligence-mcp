@@ -5,6 +5,7 @@ __pycache__/
 research/
 docs/external/
 schema.md
+mcp-server-lessons.md
 
 # C extensions
 *.so
