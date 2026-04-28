@@ -292,9 +292,17 @@ def register_resources(mcp: FastMCP) -> None:
                 if place not in UK_JURISDICTIONS:
                     overseas_flag += 1
 
-        return CompanyPSCResult(
+        result = CompanyPSCResult(
             company_number=company_number,
             total=total,
             overseas_corporate_psc_flag=overseas_flag,
             psc=psc_entries,
-        ).model_dump_json()
+        )
+        if total == 0:
+            return (
+                f'{{"company_number":"{company_number}","total":0,'
+                f'"overseas_corporate_psc_flag":0,"psc":[],'
+                f'"note":"No registrable PSC. Typical for widely-held listed PLCs where '
+                f'no single person or entity holds 25%+ of shares or voting rights."}}'
+            )
+        return result.model_dump_json()
