@@ -165,13 +165,6 @@ class CompanyProfile(BaseModel):
         default_factory=CompanyConfirmationStatementSummary,
         description="Confirmation statement filing status and next due date.",
     )
-    raw: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Full raw Companies House profile payload. Use for any field not "
-            "surfaced explicitly on this model."
-        ),
-    )
 
 
 class CompanyOfficer(BaseModel):
@@ -606,13 +599,6 @@ class CharityProfile(BaseModel):
     countries_of_operation: list[str] = Field(
         default_factory=list,
         description="Countries the charity operates in (capped at 10 upstream).",
-    )
-    raw: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Full raw Charity Commission profile payload for any field not "
-            "surfaced explicitly on this model."
-        ),
     )
 
 

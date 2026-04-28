@@ -1,11 +1,11 @@
 """
-Companies House API tools (4 tools).
+Companies House API tools.
 
 Covers:
-  - company_search      -> search by name/keyword
-  - company_profile     -> full company record with filing signals
-  - company_officers    -> directors with appointment count risk signal
-  - company_psc         -> persons with significant control / beneficial ownership
+  - company_search   (tool)     -> search by name/keyword
+  - company_profile  (resource) -> full company record with filing signals
+  - company_officers (resource) -> directors with appointment count risk signal
+  - company_psc      (resource) -> persons with significant control / beneficial ownership
 """
 
 from __future__ import annotations
@@ -140,30 +140,23 @@ def register_tools(mcp: FastMCP) -> None:
             items=items,
         )
 
-    # ------------------------------------------------------------------ #
-    # 2. company_profile
-    # ------------------------------------------------------------------ #
-    @mcp.tool(
-        name="company_profile",
-        annotations={
-            "title": "Get Full Company Profile",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
-    )
-    async def company_profile(
-        company_number: Annotated[str, Field(description="Companies House company number, e.g. '12345678' or 'SC123456'", min_length=6, max_length=10)],
-    ) -> CompanyProfile:
-        """Retrieve the full Companies House profile for a specific company number.
 
-        Returns corporate status, registered address, SIC codes, accounts
-        and confirmation statement filing status (with overdue flags),
-        active-charges flag, and incorporation date. Accounts overdue and
-        active charges are early distress signals worth cross-referencing
-        with gazette_insolvency.
-        """
+# ---------------------------------------------------------------------------
+# Resource registration
+# ---------------------------------------------------------------------------
+
+def register_resources(mcp: FastMCP) -> None:
+
+    @mcp.resource(
+        "company://{company_number}/profile",
+        name="company_profile",
+        description=(
+            "Full Companies House profile for a company number: status, address, "
+            "SIC codes, filing compliance (overdue flags), and active-charges flag."
+        ),
+        mime_type="application/json",
+    )
+    async def company_profile_resource(company_number: str) -> CompanyProfile:
         company_number = _normalise_company_number(company_number)
 
         async with companies_house_client() as client:
@@ -196,53 +189,32 @@ def register_tools(mcp: FastMCP) -> None:
             has_charges=bool(data.get("has_charges", False)),
             accounts=accounts,
             confirmation_statement=confirmation,
-            raw=data,
         )
 
-    # ------------------------------------------------------------------ #
-    # 3. company_officers
-    # ------------------------------------------------------------------ #
-    @mcp.tool(
+    @mcp.resource(
+        "company://{company_number}/officers",
         name="company_officers",
-        annotations={
-            "title": "List Company Officers",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        description=(
+            "Active officers for a Companies House company number. "
+            "Flags directors with >=10 other appointments (nominee/phoenix risk signal)."
+        ),
+        mime_type="application/json",
     )
-    async def company_officers(
-        company_number: Annotated[str, Field(description="Companies House company number", min_length=6, max_length=10)],
-        include_resigned: Annotated[bool, Field(description="If true, include resigned officers alongside active ones")] = False,
-        limit: Annotated[int, Field(description="Max officers to fetch from Companies House (upstream items_per_page). Default 100.", ge=1, le=100)] = 100,
-    ) -> CompanyOfficersResult:
-        """List directors and officers for a Companies House company number.
-
-        Returns names, roles, appointment dates, nationality, and total
-        appointment count. Directors with a high appointment count
-        (>=10 other companies) are flagged via
-        `high_appointment_count_flag` — a common trait in nominee director
-        fraud and phoenix company structures.
-        """
+    async def company_officers_resource(company_number: str) -> CompanyOfficersResult:
         company_number = _normalise_company_number(company_number)
         # NB: do NOT use register_view=true — it requires a companion
         # register_type param and only returns data for the minority of
         # companies whose statutory register is held at Companies House.
         # Filter resigned officers client-side on `resigned_on` instead.
-        qs: dict[str, Any] = {"items_per_page": limit}
-
         async with companies_house_client() as client:
             resp = await _request_with_retry(
                 client, "GET",
                 f"/company/{company_number}/officers",
-                params=qs,
+                params={"items_per_page": 100},
             )
             data = resp.json()
 
-        raw_items = data.get("items", []) or []
-        if not include_resigned:
-            raw_items = [o for o in raw_items if not o.get("resigned_on")]
+        raw_items = [o for o in (data.get("items", []) or []) if not o.get("resigned_on")]
 
         officers = [
             CompanyOfficer(
@@ -262,44 +234,27 @@ def register_tools(mcp: FastMCP) -> None:
         ]
 
         high_count_flags = sum(
-            1
-            for o in officers
-            if o.appointment_count >= HIGH_APPOINTMENT_COUNT and not o.resigned_on
+            1 for o in officers if o.appointment_count >= HIGH_APPOINTMENT_COUNT
         )
 
         return CompanyOfficersResult(
             company_number=company_number,
-            include_resigned=include_resigned,
+            include_resigned=False,
             total=len(officers),
             high_appointment_count_flag=high_count_flags,
             officers=officers,
         )
 
-    # ------------------------------------------------------------------ #
-    # 4. company_psc
-    # ------------------------------------------------------------------ #
-    @mcp.tool(
+    @mcp.resource(
+        "company://{company_number}/psc",
         name="company_psc",
-        annotations={
-            "title": "Get Persons with Significant Control",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
+        description=(
+            "Persons with Significant Control (beneficial ownership) for a company. "
+            "Flags overseas corporate PSC entries as a beneficial ownership risk signal."
+        ),
+        mime_type="application/json",
     )
-    async def company_psc(
-        company_number: Annotated[str, Field(description="Companies House company number", min_length=6, max_length=10)],
-        max_nature_chars: Annotated[int, Field(description="Per-entry cap on each 'nature of control' descriptor. Upstream entries are sometimes long legal text. Default 300.", ge=50, le=5000)] = 300,
-    ) -> CompanyPSCResult:
-        """Retrieve Persons with Significant Control (PSC) for a company.
-
-        PSC data reveals beneficial ownership — individuals or corporate
-        entities holding >25% shares, voting rights, or appointment power.
-        Corporate PSC entries with overseas registration addresses are a
-        key flag in beneficial ownership investigations and surface as
-        `overseas_corporate_psc_flag` on the response.
-        """
+    async def company_psc_resource(company_number: str) -> CompanyPSCResult:
         company_number = _normalise_company_number(company_number)
 
         async with companies_house_client() as client:
@@ -315,10 +270,7 @@ def register_tools(mcp: FastMCP) -> None:
         psc_entries: list[CompanyPSCEntry] = []
         overseas_flag = 0
         for raw in raw_items:
-            natures = _truncate_natures(
-                list(raw.get("natures_of_control") or []),
-                max_nature_chars,
-            )
+            natures = _truncate_natures(list(raw.get("natures_of_control") or []), 300)
             entry = CompanyPSCEntry(
                 kind=raw.get("kind"),
                 name=raw.get("name"),

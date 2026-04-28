@@ -1,9 +1,9 @@
 """
-Charity Commission API tools (2 tools).
+Charity Commission API tools.
 
 Covers:
-  - charity_search   -> search by name/keyword
-  - charity_profile  -> full charity record with trustees, finances, filing history
+  - charity_search   (tool)     -> search by name/keyword
+  - charity_profile  (resource) -> full charity record with trustees, finances, filing history
 """
 
 from __future__ import annotations
@@ -114,32 +114,23 @@ def register_tools(mcp: FastMCP) -> None:
             charities=items,
         )
 
-    # ------------------------------------------------------------------ #
-    # 2. charity_profile
-    # ------------------------------------------------------------------ #
-    @mcp.tool(
-        name="charity_profile",
-        annotations={
-            "title": "Get Full Charity Profile",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
-    )
-    async def charity_profile(
-        charity_number: Annotated[str, Field(description="Charity Commission registration number, e.g. '1234567'", min_length=6, max_length=12)],
-        max_trustees: Annotated[int, Field(description="Cap on the number of trustees returned. Prolific charities have 50+ trustees on file. Default 30.", ge=1, le=500)] = 30,
-        max_classifications: Annotated[int, Field(description="Cap on the number of Who/What/Where classification entries returned. Large charities have 100+. Default 50.", ge=1, le=500)] = 50,
-    ) -> CharityProfile:
-        """Retrieve the full Charity Commission profile for a registered charity.
 
-        Returns trustees, income/expenditure, filing history, governing
-        document type, area of operation, and beneficiary description.
-        Useful for verifying charitable status and governance quality.
-        Trustee and classification lists are capped via max_trustees and
-        max_classifications to keep responses bounded.
-        """
+# ---------------------------------------------------------------------------
+# Resource registration
+# ---------------------------------------------------------------------------
+
+def register_resources(mcp: FastMCP) -> None:
+
+    @mcp.resource(
+        "charity://{charity_number}/profile",
+        name="charity_profile",
+        description=(
+            "Full Charity Commission profile for a charity number: trustees, "
+            "income/expenditure, insolvency flags, governing document, and area of operation."
+        ),
+        mime_type="application/json",
+    )
+    async def charity_profile_resource(charity_number: str) -> CharityProfile:
         async with charity_client() as client:
             # allcharitydetails/{RegNumber}/{suffix} — suffix 0 = main charity
             suffix = "0"
@@ -157,28 +148,26 @@ def register_tools(mcp: FastMCP) -> None:
         reg_num = str(data.get("reg_charity_number") or lookup_number)
         raw_status = data.get("reg_status")
 
-        # Trustees — cap per max_trustees
+        # Trustees — cap at default 30
         raw_trustees = data.get("trustee_names") or []
         trustees_total = len(raw_trustees)
-        trustees_truncated = trustees_total > max_trustees
-        trustees_slice = raw_trustees[:max_trustees]
+        trustees_truncated = trustees_total > 30
         trustees = [
             CharityTrustee(trustee_name=t.get("trustee_name"))
-            for t in trustees_slice
+            for t in raw_trustees[:30]
             if isinstance(t, dict)
         ]
 
-        # Who/What/Where classifications — cap per max_classifications
+        # Who/What/Where classifications — cap at default 50
         raw_www = data.get("who_what_where") or []
         www_total = len(raw_www)
-        www_truncated = www_total > max_classifications
-        www_slice = raw_www[:max_classifications]
+        www_truncated = www_total > 50
         classifications = [
             CharityClassification(
                 classification_type=w.get("classification_type"),
                 classification_desc=w.get("classification_desc"),
             )
-            for w in www_slice
+            for w in raw_www[:50]
             if isinstance(w, dict)
         ]
 
@@ -206,5 +195,4 @@ def register_tools(mcp: FastMCP) -> None:
             who_what_where_truncated=www_truncated,
             who_what_where_total=www_total,
             countries_of_operation=countries,
-            raw=data,
         )

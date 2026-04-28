@@ -1,9 +1,9 @@
 """
-Disqualified Directors tools (2 tools).
+Disqualified Directors tools.
 
 Covers:
-  - disqualified_search   -> search disqualified officers by name
-  - disqualified_profile  -> full disqualification record by officer ID
+  - disqualified_search   (tool)     -> search disqualified officers by name
+  - disqualified_profile  (resource) -> full disqualification record by officer ID
 
 Uses the same Companies House REST API and API key as companies_house.py.
 """
@@ -102,30 +102,23 @@ def register_tools(mcp: FastMCP) -> None:
             items=items,
         )
 
-    # ------------------------------------------------------------------ #
-    # 2. disqualified_profile
-    # ------------------------------------------------------------------ #
-    @mcp.tool(
-        name="disqualified_profile",
-        annotations={
-            "title": "Disqualified Director Profile",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-            "openWorldHint": True,
-        },
-    )
-    async def disqualified_profile(
-        officer_id: Annotated[str, Field(description="Officer ID from disqualified_search results", min_length=5, max_length=50)],
-        max_companies: Annotated[int, Field(description="Per-order cap on the `company_names[]` array. Prolific disqualified directors are attached to 20+ companies per order. Default 20.", ge=1, le=500)] = 20,
-    ) -> DisqualifiedProfile:
-        """Get the full disqualification record for a disqualified director.
 
-        Returns all disqualification orders: reason, Act and section, period,
-        associated companies, and undertaking details. The officer_id comes
-        from the disqualified_search results. Tries the natural person
-        endpoint first, then the corporate officer endpoint.
-        """
+# ---------------------------------------------------------------------------
+# Resource registration
+# ---------------------------------------------------------------------------
+
+def register_resources(mcp: FastMCP) -> None:
+
+    @mcp.resource(
+        "disqualification://{officer_id}",
+        name="disqualified_profile",
+        description=(
+            "Full disqualification record for a director by officer ID. "
+            "Returns all orders: reason, Act/section, period, and associated companies."
+        ),
+        mime_type="application/json",
+    )
+    async def disqualified_profile_resource(officer_id: str) -> DisqualifiedProfile:
         oid = officer_id.strip()
         data: dict[str, Any] | None = None
         officer_kind = "natural"
@@ -155,9 +148,9 @@ def register_tools(mcp: FastMCP) -> None:
         for raw in raw_orders:
             company_names = list(raw.get("company_names") or [])
             total_companies = len(company_names)
-            truncated = total_companies > max_companies
+            truncated = total_companies > 20
             if truncated:
-                company_names = company_names[:max_companies]
+                company_names = company_names[:20]
 
             orders.append(
                 DisqualificationOrder(
