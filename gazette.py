@@ -132,6 +132,18 @@ def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Shared fetch helper
+# ---------------------------------------------------------------------------
+
+async def _fetch_gazette_notice(notice_id: str) -> dict:
+    url = f"https://www.thegazette.co.uk/notice/{notice_id.strip()}/data.json?view=linked-data"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.get(url, headers={"Accept": "application/json"})
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 
@@ -159,11 +171,7 @@ def register_tools(mcp: FastMCP) -> None:
         legal basis, court, and full text. Use gazette_insolvency first to find
         notice_numeric_id values.
         """
-        url = f"https://www.thegazette.co.uk/notice/{notice_id.strip()}/data.json?view=linked-data"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers={"Accept": "application/json"})
-            resp.raise_for_status()
-            return resp.json()
+        return await _fetch_gazette_notice(notice_id)
 
     @mcp.tool(
         name="gazette_insolvency",
@@ -266,13 +274,11 @@ def register_resources(mcp: FastMCP) -> None:
         description=(
             "Full content of a Gazette notice by numeric notice ID. "
             "Use the notice_numeric_id returned by gazette_insolvency. "
-            "Returns JSON-SIMPLE linked-data view of the notice."
+            "Returns JSON-LD linked-data view of the notice."
         ),
         mime_type="application/json",
     )
     async def gazette_notice_resource(notice_id: str) -> str:
-        url = f"https://www.thegazette.co.uk/notice/{notice_id}/data.json?view=linked-data"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, headers={"Accept": "application/json"})
-            resp.raise_for_status()
-            return resp.text
+        import json
+        data = await _fetch_gazette_notice(notice_id)
+        return json.dumps(data)

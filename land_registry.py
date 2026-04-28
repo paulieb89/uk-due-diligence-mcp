@@ -51,8 +51,6 @@ ORDER BY DESC(?transactionDate)
 LIMIT 10
 """
 
-TITLE_SEARCH_URL = "https://api.landregistry.data.gov.uk/data/title"
-
 
 def _extract_postcode(text: str) -> str | None:
     """Try to extract a postcode from a free-text address."""

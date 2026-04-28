@@ -270,7 +270,7 @@ class CompanyPSCEntry(BaseModel):
         description=(
             "List of 'nature of control' descriptors (e.g. "
             "'ownership-of-shares-75-to-100-percent'). Individual entries may "
-            "be truncated per the `max_nature_chars` input."
+            "be truncated to 300 characters each."
         ),
     )
     identification: dict[str, Any] = Field(
@@ -398,7 +398,7 @@ class DisqualificationOrder(BaseModel):
         default_factory=list,
         description=(
             "Companies associated with this disqualification. The list may be "
-            "truncated per the `max_companies` input."
+            "truncated to 20 entries."
         ),
     )
     company_names_truncated: bool = Field(
@@ -580,8 +580,7 @@ class CharityProfile(BaseModel):
     trustee_names: list[CharityTrustee] = Field(
         default_factory=list,
         description=(
-            "Trustees on record. The list may be truncated per the "
-            "`max_trustees` input."
+            "Trustees on record. Truncated to 30 entries."
         ),
     )
     trustee_names_truncated: bool = Field(
@@ -594,7 +593,7 @@ class CharityProfile(BaseModel):
         default_factory=list,
         description=(
             "Who/What/Where classification entries. The list may be truncated "
-            "per the `max_classifications` input."
+            "truncated to 50 entries."
         ),
     )
     who_what_where_truncated: bool = Field(
