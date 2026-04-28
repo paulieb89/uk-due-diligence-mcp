@@ -40,7 +40,6 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware, MiddlewareContext
-from fastmcp.server.middleware.caching import ResponseCachingMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -134,7 +133,7 @@ class ToolLogger(Middleware):
 
 mcp = FastMCP(
     name="uk_due_diligence_mcp",
-    middleware=[ToolLogger(), ResponseCachingMiddleware()],
+    middleware=[ToolLogger()],
     instructions=(
         "UK due diligence MCP server. "
         "Six search/verb tools and six noun resources across five public registers: "
