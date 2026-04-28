@@ -1,7 +1,7 @@
 """
-The Gazette linked-data API tool (1 tool).
+The Gazette linked-data API tool (1 tool) + notice resource.
 
-The Gazette's linked-data read API is unauthenticated and uses a REST+RDF pattern.
+The Gazette's API is unauthenticated and uses an Atom-style JSON feed.
 Corporate insolvency notice codes span the 2440-2460 range:
 
   2441 -- Winding-Up Petition
@@ -19,8 +19,9 @@ Corporate insolvency notice codes span the 2440-2460 range:
   2456 -- Creditors' Voluntary Liquidation
   2460 -- Striking-Off Notice
 
-The read API returns JSON-LD. We parse the @graph array.
-Query params: ?noticecode=XXXX&text=NAME&start-date=YYYY-MM-DD&end-date=YYYY-MM-DD
+The search feed returns JSON with a top-level `entry` array (not JSON-LD @graph).
+Feed endpoint: /data.json?noticecode=XXXX&text=NAME&start-date=YYYY-MM-DD&end-date=YYYY-MM-DD
+Per-notice endpoint: https://www.thegazette.co.uk/notice/{id}/data.json?view=linked-data
 """
 
 from __future__ import annotations
@@ -30,18 +31,27 @@ from typing import Annotated, Any
 from pydantic import Field
 from fastmcp import FastMCP
 
+import httpx
 from http_client import _request_with_retry, gazette_client
 from models import GazetteInsolvencyResult, GazetteNotice
 
 # ---------------------------------------------------------------------------
 # Notice code taxonomy
 # ---------------------------------------------------------------------------
-ALL_CORPORATE_INSOLVENCY_CODES = [
+
+# Corporate insolvency codes returned by the Gazette /insolvency/notice endpoint.
+# Includes 2431-2433 (legacy company codes) and 2440-2460 range.
+# Personal insolvency codes (2500+) are excluded.
+ALL_CORPORATE_INSOLVENCY_CODES = {
+    "2431", "2432", "2433",  # older corporate winding-up / liquidator codes
     "2441", "2442", "2443", "2444", "2445", "2446",
     "2447", "2448", "2449", "2450", "2452", "2455", "2456", "2460",
-]
+}
 
 NOTICE_LABELS: dict[str, str] = {
+    "2431": "Resolutions for Winding-Up",
+    "2432": "Appointment of Liquidators",
+    "2433": "Notice to Creditors / Contributories",
     "2441": "Winding-Up Petition",
     "2442": "Dismissal of Winding-Up Petition",
     "2443": "Winding-Up Order",
@@ -66,40 +76,56 @@ SEVERITY: dict[str, int] = {
     "2456": 8,   # Creditors' Voluntary Liquidation
     "2445": 7,   # Provisional Liquidator
     "2452": 7,   # Liquidator appointed
+    "2432": 7,   # Appointment of Liquidators (legacy)
+    "2431": 6,   # Resolutions for Winding-Up (legacy)
     "2441": 6,   # Petition (not yet order)
     "2460": 5,   # Striking-Off
     "2455": 4,   # Voluntary Winding-Up Resolution
     "2450": 3,   # Moratorium
     "2446": 2,
     "2447": 2,
+    "2433": 2,
     "2442": 1,
     "2444": 1,
 }
 
 
-def _extract_notices(graph: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pull structured notice records from a JSON-LD @graph array."""
+def _strip_html(html: str) -> str:
+    import re
+    return re.sub(r"<[^>]+>", " ", html).strip()
+
+
+def _notice_numeric_id(notice_uri: str) -> str:
+    """Extract the numeric notice ID from a Gazette notice URI.
+
+    e.g. 'https://www.thegazette.co.uk/id/notice/5122793' → '5122793'
+    """
+    return notice_uri.rstrip("/").split("/")[-1]
+
+
+def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pull structured insolvency notice records from the Gazette feed entry array."""
     notices = []
-    for node in graph:
-        if "@type" not in node:
+    for entry in entries:
+        code = str(entry.get("f:notice-code", ""))
+        if code not in ALL_CORPORATE_INSOLVENCY_CODES:
             continue
-        types = node["@type"] if isinstance(node["@type"], list) else [node["@type"]]
-        if any("Notice" in t or "notice" in t for t in types):
-            code = str(node.get("noticeCode", node.get("@type", [""])[-1]))
-            notices.append(
-                {
-                    "notice_id": node.get("@id", "—"),
-                    "notice_code": code,
-                    "notice_type": NOTICE_LABELS.get(code, "Corporate Notice"),
-                    "date": node.get("publicationDate", node.get("noticeDate", "—")),
-                    "edition": node.get("edition", "—"),
-                    "title": node.get("noticeTitle", node.get("title", "—")),
-                    "content": node.get("content", node.get("noticeContent", "")),
-                }
-            )
+        notice_uri = entry.get("id", "")
+        raw_content = entry.get("content", "")
+        notices.append(
+            {
+                "notice_id": notice_uri,
+                "notice_numeric_id": _notice_numeric_id(notice_uri) if notice_uri else None,
+                "notice_code": code,
+                "notice_type": NOTICE_LABELS.get(code, "Corporate Notice"),
+                "date": (entry.get("published") or "")[:10] or None,
+                "title": entry.get("title") or None,
+                "content": _strip_html(raw_content) if raw_content else None,
+            }
+        )
     # Sort by severity descending, then date descending
     notices.sort(
-        key=lambda n: (SEVERITY.get(n["notice_code"], 0), n["date"]),
+        key=lambda n: (SEVERITY.get(n["notice_code"], 0), n["date"] or ""),
         reverse=True,
     )
     return notices
@@ -126,83 +152,66 @@ def register_tools(mcp: FastMCP) -> None:
         notice_type: Annotated[str | None, Field(description="Filter by notice code (e.g. '2441' winding-up petition, '2443' winding-up order, '2448' administration order, '2460' striking-off). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
-        max_content_chars: Annotated[int, Field(description="Per-notice cap on the free-text `content` field. Default 500 keeps responses bounded; raise for notices where the full legal wording matters.", ge=50, le=20000)] = 500,
         max_notices: Annotated[int, Field(description="Global cap on total notices returned across all codes, after severity/date sort. Default 20. Raise up to 140 (14 codes × 10) to see the full result set.", ge=1, le=140)] = 20,
     ) -> GazetteInsolvencyResult:
-        """Search The Gazette's linked-data API for corporate insolvency notices.
+        """Search The Gazette's insolvency notice index by entity name.
 
-        Searches notice codes 2441-2460 (winding-up petitions, administration
-        orders, liquidation appointments, striking-off notices, etc.) by
-        entity name. Results are sorted by severity — winding-up orders and
-        administration orders appear first.
+        Searches the Gazette's insolvency endpoint which covers corporate
+        notice codes: winding-up orders (2443), administration orders (2448),
+        liquidator appointments (2452), striking-off notices (2460), and more.
+        Results are sorted by severity — winding-up orders and administration
+        orders appear first.
+
+        Each result includes a notice_numeric_id. Read the full legal wording
+        via the notice://{notice_numeric_id} resource.
 
         The Gazette is the official UK public record. A notice here means
         the event has been formally published and is legally effective.
         """
-        # Build target notice codes
-        if notice_type:
-            codes_to_search = [notice_type]
-        else:
-            codes_to_search = ALL_CORPORATE_INSOLVENCY_CODES
+        qs: dict[str, Any] = {
+            "text": entity_name,
+            "results-page-size": 100,
+        }
+        if start_date:
+            qs["start-publish-date"] = start_date
+        if end_date:
+            qs["end-publish-date"] = end_date
 
         all_notices: list[dict[str, Any]] = []
 
         async with gazette_client() as client:
-            for code in codes_to_search:
-                qs: dict[str, Any] = {
-                    "noticecode": code,
-                    "text": entity_name,
-                    "results-page-size": 10,
-                    "format": "application/json",
-                }
-                if start_date:
-                    qs["start-date"] = start_date
-                if end_date:
-                    qs["end-date"] = end_date
+            try:
+                resp = await _request_with_retry(
+                    client, "GET", "/insolvency/notice/data.json", params=qs
+                )
+                raw = resp.json()
+                entries = raw.get("entry", []) if isinstance(raw, dict) else []
+                if isinstance(entries, dict):
+                    entries = [entries]
+                all_notices = _extract_notices(entries)
+            except Exception:
+                pass
 
-                try:
-                    resp = await _request_with_retry(client, "GET", "", params=qs)
-                    raw = resp.json()
-                    # JSON-LD: top-level dict with @graph array
-                    graph = raw.get("@graph", []) if isinstance(raw, dict) else []
-                    notices = _extract_notices(graph)
-                    all_notices.extend(notices)
-                except Exception:
-                    # Per-code failures are non-fatal -- continue scanning.
-                    # Graceful degradation per lesson 19.
-                    continue
+        # Filter by specific notice type if requested
+        if notice_type:
+            all_notices = [n for n in all_notices if n["notice_code"] == notice_type]
 
-        # Re-sort combined results, then apply global cap
-        all_notices.sort(
-            key=lambda n: (SEVERITY.get(n["notice_code"], 0), n["date"]),
-            reverse=True,
-        )
+        # Apply global cap (already sorted by _extract_notices)
         all_notices = all_notices[:max_notices]
 
         notice_models: list[GazetteNotice] = []
         for n in all_notices:
-            raw_content = n.get("content") or ""
-            original_length = len(raw_content)
-            if original_length > max_content_chars:
-                content_out = raw_content[:max_content_chars] + " …[truncated]"
-                content_truncated = True
-            else:
-                content_out = raw_content if raw_content else None
-                content_truncated = False
-
             code = n.get("notice_code")
             notice_models.append(
                 GazetteNotice(
                     notice_id=n.get("notice_id"),
+                    notice_numeric_id=n.get("notice_numeric_id"),
                     notice_code=code,
                     notice_type=n.get("notice_type"),
                     severity=SEVERITY.get(code or "", 0),
-                    date=n.get("date") if n.get("date") != "—" else None,
-                    edition=n.get("edition") if n.get("edition") != "—" else None,
-                    title=n.get("title") if n.get("title") != "—" else None,
-                    content=content_out,
-                    content_truncated=content_truncated,
-                    content_original_length=original_length,
+                    date=n.get("date"),
+                    title=n.get("title"),
+                    content=n.get("content"),
                 )
             )
 
@@ -215,3 +224,27 @@ def register_tools(mcp: FastMCP) -> None:
             max_notices_cap=max_notices,
             notices=notice_models,
         )
+
+
+# ---------------------------------------------------------------------------
+# Resource registration
+# ---------------------------------------------------------------------------
+
+def register_resources(mcp: FastMCP) -> None:
+
+    @mcp.resource(
+        "notice://{notice_id}",
+        name="gazette_notice",
+        description=(
+            "Full content of a Gazette notice by numeric notice ID. "
+            "Use the notice_numeric_id returned by gazette_insolvency. "
+            "Returns JSON-SIMPLE linked-data view of the notice."
+        ),
+        mime_type="application/json",
+    )
+    async def gazette_notice_resource(notice_id: str) -> str:
+        url = f"https://www.thegazette.co.uk/notice/{notice_id}/data.json?view=linked-data"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+            resp.raise_for_status()
+            return resp.text

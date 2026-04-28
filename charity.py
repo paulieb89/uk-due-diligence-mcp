@@ -132,7 +132,7 @@ def register_resources(mcp: FastMCP) -> None:
     )
     async def charity_profile_resource(charity_number: str) -> str:
         async with charity_client() as client:
-            # allcharitydetails/{RegNumber}/{suffix} — suffix 0 = main charity
+            # allcharitydetailsV2/{RegNumber}/{suffix} — suffix 0 = main charity
             suffix = "0"
             lookup_number = charity_number
             if "-" in charity_number:
@@ -141,7 +141,7 @@ def register_resources(mcp: FastMCP) -> None:
                 suffix = parts[1]
             resp = await _request_with_retry(
                 client, "GET",
-                f"/allcharitydetails/{lookup_number}/{suffix}",
+                f"/allcharitydetailsV2/{lookup_number}/{suffix}",
             )
             data = resp.json()
 

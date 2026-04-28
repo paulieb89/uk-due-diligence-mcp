@@ -1,10 +1,16 @@
 """
 HMRC VAT number validation tool (1 tool).
 
-Uses the HMRC Check a UK VAT Number API:
-  GET https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup/{vatNumber}
+Uses the HMRC Check a UK VAT Number API v2:
+  GET {base}/organisations/vat/check-vat-number/lookup/{vatNumber}
 
-This is a free, unauthenticated API. Returns:
+API v2 is application-restricted and requires a Bearer token obtained via
+the client_credentials OAuth2 flow. Set env vars:
+  HMRC_CLIENT_ID     — from the HMRC Developer Hub app
+  HMRC_CLIENT_SECRET — from the HMRC Developer Hub app
+  HMRC_ENV           — 'sandbox' or 'production' (default: production)
+
+Returns:
   - target.name       -> trading name as registered with HMRC
   - target.address    -> registered trading address
   - target.vatNumber  -> confirmed VAT number
@@ -17,6 +23,8 @@ due diligence signal.
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Annotated, Any
 
 import httpx
@@ -25,7 +33,64 @@ from fastmcp import FastMCP
 
 from models import VATValidationResult
 
-HMRC_VAT_LOOKUP_BASE = "https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup"
+# ---------------------------------------------------------------------------
+# Environment-dependent base URLs
+# ---------------------------------------------------------------------------
+
+def _hmrc_env() -> str:
+    return os.environ.get("HMRC_ENV", "production").lower()
+
+
+def _hmrc_base() -> str:
+    if _hmrc_env() == "sandbox":
+        return "https://test-api.service.hmrc.gov.uk"
+    return "https://api.service.hmrc.gov.uk"
+
+
+HMRC_VAT_LOOKUP_PATH = "/organisations/vat/check-vat-number/lookup"
+
+# ---------------------------------------------------------------------------
+# Token cache — module-level, avoids re-fetching for the token's lifetime
+# ---------------------------------------------------------------------------
+
+_token_cache: dict[str, Any] = {"token": None, "expires_at": 0.0}
+
+
+async def _get_bearer_token() -> str:
+    """Obtain (or return cached) HMRC application-restricted Bearer token."""
+    client_id = os.environ.get("HMRC_CLIENT_ID")
+    client_secret = os.environ.get("HMRC_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise ValueError(
+            "HMRC VAT validation requires application credentials. "
+            "Set HMRC_CLIENT_ID and HMRC_CLIENT_SECRET environment variables. "
+            "Register your application at https://developer.service.hmrc.gov.uk"
+        )
+
+    # Return cached token if still valid (with 60s buffer)
+    now = time.time()
+    if _token_cache["token"] and now < _token_cache["expires_at"] - 60:
+        return _token_cache["token"]
+
+    token_url = f"{_hmrc_base()}/oauth/token"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            token_url,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": client_id,
+                "client_secret": client_secret,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    token = data["access_token"]
+    expires_in = int(data.get("expires_in", 14400))
+    _token_cache["token"] = token
+    _token_cache["expires_at"] = now + expires_in
+    return token
 
 
 def _format_address(addr: dict[str, Any]) -> str:
@@ -75,10 +140,18 @@ def register_tools(mcp: FastMCP) -> None:
             )
         vat_number = clean_vat
 
-        url = f"{HMRC_VAT_LOOKUP_BASE}/{vat_number}"
+        token = await _get_bearer_token()
+        base = _hmrc_base()
+        url = f"{base}{HMRC_VAT_LOOKUP_PATH}/{vat_number}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers={"Accept": "application/json"})
+            resp = await client.get(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
 
             if resp.status_code == 404:
                 return VATValidationResult(

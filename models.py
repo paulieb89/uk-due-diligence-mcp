@@ -153,8 +153,8 @@ class CompanyProfile(BaseModel):
     has_charges: bool = Field(
         False,
         description=(
-            "True if the company has active registered charges (secured debt). "
-            "A due diligence signal."
+            "True if the company has outstanding registered charges (secured debt), "
+            "derived from the /charges endpoint. A due diligence signal."
         ),
     )
     accounts: CompanyAccountsSummary = Field(
@@ -193,11 +193,12 @@ class CompanyOfficer(BaseModel):
         default_factory=dict,
         description="Partial date of birth (month/year) as returned by CH.",
     )
-    appointment_count: int = Field(
-        0,
+    appointment_count: int | None = Field(
+        None,
         description=(
-            "Total number of other active appointments held by this officer. "
-            "Values of 10+ are a nominee/phoenix risk signal."
+            "Total number of other active appointments held by this officer, or null "
+            "if unavailable. The Companies House officer list endpoint does not include "
+            "this count; a separate per-officer call is required to populate it."
         ),
     )
     address: dict[str, Any] = Field(
@@ -223,11 +224,12 @@ class CompanyOfficersResult(BaseModel):
     total: int = Field(
         ..., description="Total officers returned (filtered by include_resigned)."
     )
-    high_appointment_count_flag: int = Field(
-        0,
+    high_appointment_count_flag: int | None = Field(
+        None,
         description=(
-            "Number of active officers with 10+ total appointments. Non-zero "
-            "values are a nominee/phoenix director risk signal."
+            "Number of active officers with 10+ total appointments, or null "
+            "if appointment counts were not fetched. Non-zero values are a "
+            "nominee/phoenix director risk signal."
         ),
     )
     officers: list[CompanyOfficer] = Field(
@@ -678,7 +680,14 @@ class GazetteNotice(BaseModel):
     model_config = BASE_CFG
 
     notice_id: str | None = Field(
-        None, description="Upstream notice ID (typically a URI)."
+        None, description="Gazette notice URI (e.g. 'https://www.thegazette.co.uk/id/notice/5122793')."
+    )
+    notice_numeric_id: str | None = Field(
+        None,
+        description=(
+            "Numeric notice ID. Read full notice content via the "
+            "notice://{notice_numeric_id} resource."
+        ),
     )
     notice_code: str | None = Field(
         None,
@@ -701,22 +710,15 @@ class GazetteNotice(BaseModel):
     )
     date: str | None = Field(
         None,
-        description="Publication/notice date (ISO format where available).",
+        description="Publication date (ISO YYYY-MM-DD).",
     )
-    edition: str | None = Field(None, description="Gazette edition identifier.")
     title: str | None = Field(None, description="Notice title.")
     content: str | None = Field(
         None,
         description=(
-            "Notice body. May be truncated per the `max_content_chars` input."
+            "Brief notice excerpt from the search feed (HTML stripped). "
+            "For full legal wording read notice://{notice_numeric_id}."
         ),
-    )
-    content_truncated: bool = Field(
-        False, description="True if content was truncated."
-    )
-    content_original_length: int = Field(
-        0,
-        description="Original length of the notice content before truncation.",
     )
 
 

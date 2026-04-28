@@ -21,7 +21,7 @@ import httpx
 # ---------------------------------------------------------------------------
 CH_BASE = "https://api.company-information.service.gov.uk"
 CHARITY_BASE = "https://api.charitycommission.gov.uk/register/api"
-GAZETTE_BASE = "https://www.thegazette.co.uk/all-notices/notice"
+GAZETTE_BASE = "https://www.thegazette.co.uk"
 HMLR_BASE = "https://api.landregistry.data.gov.uk/data/ppi"
 HMRC_VAT_BASE = "https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup"
 
@@ -121,10 +121,13 @@ def charity_client() -> httpx.AsyncClient:
 
 
 def gazette_client() -> httpx.AsyncClient:
-    """Gazette linked-data API — no auth required."""
+    """Gazette API — no auth required.
+
+    The insolvency search endpoint is sensitive to Accept headers; omitting
+    it lets the server negotiate (returns JSON by default for /data.json paths).
+    """
     return httpx.AsyncClient(
         base_url=GAZETTE_BASE,
-        headers={"Accept": "application/json"},
         timeout=20.0,
     )
 

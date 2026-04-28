@@ -165,6 +165,25 @@ def register_resources(mcp: FastMCP) -> None:
             )
             data = resp.json()
 
+            # has_charges in the profile response is unreliable — fetch charges
+            # separately and check for outstanding items.
+            has_charges = False
+            try:
+                charges_resp = await _request_with_retry(
+                    client, "GET", f"/company/{company_number}/charges",
+                    params={"items_per_page": 1},
+                )
+                charges_data = charges_resp.json()
+                charges_items = charges_data.get("items") or []
+                has_charges = any(
+                    item.get("status") == "outstanding" for item in charges_items
+                ) or (
+                    charges_data.get("total_count", 0) > 0
+                    and not charges_items  # items omitted means counts are non-zero
+                )
+            except Exception:
+                pass  # charges endpoint failure is non-fatal
+
         accs_raw = data.get("accounts") or {}
         conf_raw = data.get("confirmation_statement") or {}
 
@@ -186,7 +205,7 @@ def register_resources(mcp: FastMCP) -> None:
             date_of_creation=data.get("date_of_creation"),
             sic_codes=list(data.get("sic_codes") or []),
             registered_office_address=data.get("registered_office_address") or {},
-            has_charges=bool(data.get("has_charges", False)),
+            has_charges=has_charges,
             accounts=accounts,
             confirmation_statement=confirmation,
         ).model_dump_json()
@@ -226,22 +245,18 @@ def register_resources(mcp: FastMCP) -> None:
                 country_of_residence=raw.get("country_of_residence"),
                 occupation=raw.get("occupation"),
                 date_of_birth=raw.get("date_of_birth") or {},
-                appointment_count=int(raw.get("appointment_count", 0) or 0),
+                appointment_count=None,
                 address=raw.get("address") or {},
                 links=raw.get("links") or {},
             )
             for raw in raw_items
         ]
 
-        high_count_flags = sum(
-            1 for o in officers if o.appointment_count >= HIGH_APPOINTMENT_COUNT
-        )
-
         return CompanyOfficersResult(
             company_number=company_number,
             include_resigned=False,
             total=len(officers),
-            high_appointment_count_flag=high_count_flags,
+            high_appointment_count_flag=None,
             officers=officers,
         ).model_dump_json()
 
