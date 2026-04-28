@@ -203,7 +203,7 @@ async def stats_endpoint(request: Request) -> JSONResponse:
 # Register all tools
 # ---------------------------------------------------------------------------
 
-import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat
+import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat, search_fetch
 
 companies_house.register_tools(mcp)
 charity.register_tools(mcp)
@@ -211,6 +211,7 @@ disqualified.register_tools(mcp)
 land_registry.register_tools(mcp)
 gazette.register_tools(mcp)
 hmrc_vat.register_tools(mcp)
+search_fetch.register_tools(mcp)
 
 companies_house.register_resources(mcp)
 charity.register_resources(mcp)
