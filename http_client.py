@@ -125,10 +125,12 @@ def gazette_client() -> httpx.AsyncClient:
 
     The insolvency search endpoint is sensitive to Accept headers; omitting
     it lets the server negotiate (returns JSON by default for /data.json paths).
+    follow_redirects=True needed as the Gazette uses redirects on some paths.
     """
     return httpx.AsyncClient(
         base_url=GAZETTE_BASE,
         timeout=20.0,
+        follow_redirects=True,
     )
 
 
