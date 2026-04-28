@@ -127,6 +127,7 @@ def register_tools(mcp: FastMCP) -> None:
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
         max_content_chars: Annotated[int, Field(description="Per-notice cap on the free-text `content` field. Default 500 keeps responses bounded; raise for notices where the full legal wording matters.", ge=50, le=20000)] = 500,
+        max_notices: Annotated[int, Field(description="Global cap on total notices returned across all codes, after severity/date sort. Default 20. Raise up to 140 (14 codes × 10) to see the full result set.", ge=1, le=140)] = 20,
     ) -> GazetteInsolvencyResult:
         """Search The Gazette's linked-data API for corporate insolvency notices.
 
@@ -171,11 +172,12 @@ def register_tools(mcp: FastMCP) -> None:
                     # Graceful degradation per lesson 19.
                     continue
 
-        # Re-sort combined results
+        # Re-sort combined results, then apply global cap
         all_notices.sort(
             key=lambda n: (SEVERITY.get(n["notice_code"], 0), n["date"]),
             reverse=True,
         )
+        all_notices = all_notices[:max_notices]
 
         notice_models: list[GazetteNotice] = []
         for n in all_notices:
@@ -210,5 +212,6 @@ def register_tools(mcp: FastMCP) -> None:
             start_date=start_date,
             end_date=end_date,
             total_notices=len(notice_models),
+            max_notices_cap=max_notices,
             notices=notice_models,
         )

@@ -644,7 +644,7 @@ class LandTitleTransaction(BaseModel):
 
 
 class LandTitleSearchResult(BaseModel):
-    """HMLR land registry search result for a given postcode."""
+    """HMLR Price Paid Index search result for a given postcode."""
 
     model_config = BASE_CFG
 
@@ -663,13 +663,6 @@ class LandTitleSearchResult(BaseModel):
         default_factory=list,
         description=(
             "Recent Price Paid transactions for the postcode, sorted newest first."
-        ),
-    )
-    title_data: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Title ownership data from the HMLR title endpoint. Currently always "
-            "empty — the free title endpoint does not return data for most lookups."
         ),
     )
 
@@ -744,7 +737,10 @@ class GazetteInsolvencyResult(BaseModel):
         None, description="Upper bound of the date range filter, if any."
     )
     total_notices: int = Field(
-        ..., description="Total notices returned after deduplication and sorting."
+        ..., description="Total notices returned after deduplication, sorting, and cap."
+    )
+    max_notices_cap: int = Field(
+        ..., description="The max_notices cap applied. Upstream may have more matching notices."
     )
     notices: list[GazetteNotice] = Field(
         default_factory=list,

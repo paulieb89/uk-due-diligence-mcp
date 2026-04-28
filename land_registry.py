@@ -1,16 +1,11 @@
 """
-HMLR Land Registry title search tool (1 tool).
+HMLR Land Registry price paid search tool (1 tool).
 
-Uses the Land Registry Linked Data API (api.landregistry.data.gov.uk).
-The PPI (Price Paid Index) endpoint is queried with SPARQL via the
-REST query interface. For title/ownership data we use the Title Search
-endpoint which returns registered proprietor name, title class, tenure,
-and charge/mortgage data.
+Uses the Land Registry Linked Data SPARQL endpoint to query the
+Price Paid Index (PPI) by postcode. Returns recent sale transactions
+only — not title ownership or proprietor data.
 
-The free API (api.landregistry.data.gov.uk) returns RDF/Turtle by default.
-We pass Accept: application/json to get JSON-LD.
-
-Note: The HMLR API covers England and Wales only.
+Note: Covers England and Wales only.
 Land Register of Scotland and Land & Property Services NI are separate.
 """
 
@@ -77,7 +72,7 @@ def register_tools(mcp: FastMCP) -> None:
     @mcp.tool(
         name="land_title_search",
         annotations={
-            "title": "Search HMLR Land Registry Title",
+            "title": "Search Price Paid Transactions by Postcode",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -87,12 +82,13 @@ def register_tools(mcp: FastMCP) -> None:
     async def land_title_search(
         address_or_postcode: Annotated[str, Field(description="UK property address or postcode. Postcode is most reliable: e.g. 'NG1 1AB'. Full address also accepted.", min_length=4, max_length=200)],
     ) -> LandTitleSearchResult:
-        """Search HM Land Registry for property ownership data by address or postcode.
+        """Search HM Land Registry Price Paid Index by postcode or address.
 
-        Returns registered proprietor name, title class (absolute/qualified/
-        possessory), tenure (freehold/leasehold), and recent price paid
-        transactions. Covers England and Wales only. Price paid transactions
-        are hard-capped at 10 upstream.
+        Returns up to 10 recent sale transactions for the postcode: price,
+        date, address, property type, and tenure (Freehold/Leasehold).
+        Covers England and Wales only. Postcode gives the most reliable
+        results — a full address is also accepted and the postcode is
+        extracted automatically.
         """
         # Extract or use postcode
         text = address_or_postcode.strip().upper()
@@ -159,5 +155,4 @@ def register_tools(mcp: FastMCP) -> None:
             postcode=postcode,
             total=len(transactions),
             transactions=transactions,
-            title_data={},
         )
