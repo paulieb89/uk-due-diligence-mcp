@@ -329,7 +329,7 @@ async def my_tool() -> dict:
     # FastMCP converts this to structuredContent automatically
 ```
 
-However, the model only sees the text `content`, not `structuredContent`. If you return a bare dict, the model may not know what was displayed. For app tools where the model needs to understand the output, consider returning both text and structured data. Check FastMCP docs for the `ToolResult` pattern.
+Both Claude and ChatGPT read `content[0].text` as their primary signal — not `structuredContent`. `structuredContent` is for programmatic/app consumers (Prefab UI, ext-apps `ontoolresult` handler, strict MCP clients validating against outputSchema). If you return a bare dict and the model needs to reference the output in conversation, consider returning explicit text alongside the structured data via `ToolResult`. Check FastMCP docs for the `ToolResult` pattern.
 
 ## 11. CORS Is Almost Never Needed
 
@@ -965,6 +965,7 @@ The actual fix was 9 lines of net code change. The lesson took half a day.
 - **If you still see the error after fixing the return type, look for response-mutating middleware.** Specifically `ResponseLimitingMiddleware` or anything custom that calls `result.content = ...`. Remove it.
 - **Truncate at the tool level** with a `max_chars` parameter, not at the server level.
 - **The size at which it fails is meaningful** — if small responses work but large ones don't, it's almost certainly middleware truncation.
+- **`ResponseCachingMiddleware` has a related but different failure mode** — it serves stale pre-fix responses after a deploy, making fixed tools look broken. See lesson 38.
 
 ## 34. ResourcesAsTools Is a Trap for Tool-Only Clients
 

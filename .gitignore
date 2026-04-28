@@ -3,6 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 research/
+docs/external/
+schema.md
 
 # C extensions
 *.so
