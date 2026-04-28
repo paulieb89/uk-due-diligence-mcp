@@ -118,7 +118,7 @@ def register_resources(mcp: FastMCP) -> None:
         ),
         mime_type="application/json",
     )
-    async def disqualified_profile_resource(officer_id: str) -> DisqualifiedProfile:
+    async def disqualified_profile_resource(officer_id: str) -> str:
         oid = officer_id.strip()
         data: dict[str, Any] | None = None
         officer_kind = "natural"
@@ -182,4 +182,4 @@ def register_resources(mcp: FastMCP) -> None:
             date_of_birth=data.get("date_of_birth"),
             nationality=data.get("nationality"),
             disqualifications=orders,
-        )
+        ).model_dump_json()

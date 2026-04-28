@@ -130,7 +130,7 @@ def register_resources(mcp: FastMCP) -> None:
         ),
         mime_type="application/json",
     )
-    async def charity_profile_resource(charity_number: str) -> CharityProfile:
+    async def charity_profile_resource(charity_number: str) -> str:
         async with charity_client() as client:
             # allcharitydetails/{RegNumber}/{suffix} — suffix 0 = main charity
             suffix = "0"
@@ -195,4 +195,4 @@ def register_resources(mcp: FastMCP) -> None:
             who_what_where_truncated=www_truncated,
             who_what_where_total=www_total,
             countries_of_operation=countries,
-        )
+        ).model_dump_json()

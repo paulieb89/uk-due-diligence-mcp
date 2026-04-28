@@ -156,7 +156,7 @@ def register_resources(mcp: FastMCP) -> None:
         ),
         mime_type="application/json",
     )
-    async def company_profile_resource(company_number: str) -> CompanyProfile:
+    async def company_profile_resource(company_number: str) -> str:
         company_number = _normalise_company_number(company_number)
 
         async with companies_house_client() as client:
@@ -189,7 +189,7 @@ def register_resources(mcp: FastMCP) -> None:
             has_charges=bool(data.get("has_charges", False)),
             accounts=accounts,
             confirmation_statement=confirmation,
-        )
+        ).model_dump_json()
 
     @mcp.resource(
         "company://{company_number}/officers",
@@ -200,7 +200,7 @@ def register_resources(mcp: FastMCP) -> None:
         ),
         mime_type="application/json",
     )
-    async def company_officers_resource(company_number: str) -> CompanyOfficersResult:
+    async def company_officers_resource(company_number: str) -> str:
         company_number = _normalise_company_number(company_number)
         # NB: do NOT use register_view=true — it requires a companion
         # register_type param and only returns data for the minority of
@@ -243,7 +243,7 @@ def register_resources(mcp: FastMCP) -> None:
             total=len(officers),
             high_appointment_count_flag=high_count_flags,
             officers=officers,
-        )
+        ).model_dump_json()
 
     @mcp.resource(
         "company://{company_number}/psc",
@@ -254,7 +254,7 @@ def register_resources(mcp: FastMCP) -> None:
         ),
         mime_type="application/json",
     )
-    async def company_psc_resource(company_number: str) -> CompanyPSCResult:
+    async def company_psc_resource(company_number: str) -> str:
         company_number = _normalise_company_number(company_number)
 
         async with companies_house_client() as client:
@@ -297,4 +297,4 @@ def register_resources(mcp: FastMCP) -> None:
             total=total,
             overseas_corporate_psc_flag=overseas_flag,
             psc=psc_entries,
-        )
+        ).model_dump_json()
