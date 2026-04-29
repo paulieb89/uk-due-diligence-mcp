@@ -170,41 +170,41 @@ def register_tools(mcp: FastMCP) -> None:
             raise ValueError(f"Invalid ID format {id!r} — expected prefix:value")
 
         if prefix == "company":
-            result = await _fetch_company_profile(_normalise_company_number(value))
+            co = await _fetch_company_profile(_normalise_company_number(value))
             return {
                 "id": id,
-                "title": result.company_name or value,
-                "content": result.model_dump_json(),
+                "title": co.company_name or value,
+                "content": co.model_dump_json(),
                 "metadata": {
                     "source": "companies_house",
-                    "status": result.company_status,
-                    "company_type": result.company_type,
-                    "date_of_creation": result.date_of_creation,
+                    "status": co.company_status,
+                    "company_type": co.company_type,
+                    "date_of_creation": co.date_of_creation,
                 },
             }
 
         if prefix == "charity":
-            result = await _fetch_charity_profile(value)
+            ch = await _fetch_charity_profile(value)
             return {
                 "id": id,
-                "title": result.charity_name or value,
-                "content": result.model_dump_json(),
+                "title": ch.charity_name or value,
+                "content": ch.model_dump_json(),
                 "metadata": {
                     "source": "charity_commission",
-                    "status": result.reg_status_label,
-                    "date_of_registration": result.date_of_registration,
+                    "status": ch.reg_status_label,
+                    "date_of_registration": ch.date_of_registration,
                 },
             }
 
         if prefix == "disqualification":
-            result = await _fetch_disqualified_profile(value)
+            dq = await _fetch_disqualified_profile(value)
             return {
                 "id": id,
-                "title": result.name or value,
-                "content": result.model_dump_json(),
+                "title": dq.name or value,
+                "content": dq.model_dump_json(),
                 "metadata": {
                     "source": "companies_house_disqualified",
-                    "officer_kind": result.officer_kind,
+                    "officer_kind": dq.officer_kind,
                 },
             }
 
