@@ -8,6 +8,7 @@ Every data source is a legally-mandated register with a free official API.
 
 [![PyPI](https://img.shields.io/pypi/v/uk-due-diligence-mcp)](https://pypi.org/project/uk-due-diligence-mcp/)
 [![uk-due-diligence-mcp MCP server](https://glama.ai/mcp/servers/paulieb89/uk-due-diligence-mcp/badges/card.svg)](https://glama.ai/mcp/servers/paulieb89/uk-due-diligence-mcp)
+[![smithery badge](https://smithery.ai/badge/bouch/uk-due-diligence)](https://smithery.ai/servers/bouch/uk-due-diligence)
 
 ---
 
