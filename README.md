@@ -1,6 +1,6 @@
 # uk-due-diligence-mcp
 
-Eleven tools across five UK public registers. Zero paywalls. All official APIs.
+Tools across five UK public registers. Zero paywalls. All official APIs.
 
 Give an agent a company name and it pulls corporate status, filing compliance, director networks, beneficial ownership chains, disqualification checks, insolvency notices, VAT validation, and property transactions.
 
@@ -37,7 +37,22 @@ Every data source is a legally-mandated register with a free official API.
 | `charity_profile` | Charity Commission | Full record: trustees, finances, governing doc |
 | `land_title_search` | HMLR | Property ownership via SPARQL PPI query |
 | `gazette_insolvency` | The Gazette | Corporate insolvency notices (codes 2441-2460) |
+| `gazette_notice` | The Gazette | Full legal wording of a specific insolvency notice |
 | `vat_validate` | HMRC VAT | Trading name + address as registered for VAT |
+| `search` | All registers | Fan-out search across all registers — returns IDs for ChatGPT deep research |
+| `fetch` | All registers | Fetch a structured record by ID returned from `search` |
+
+---
+
+## Prompts
+
+Three workflow prompts orchestrate multi-step investigations. Available via `get_prompt` on tool-only clients (ChatGPT) and natively on protocol-aware clients (Claude, Inspector).
+
+| Prompt | Description |
+|--------|-------------|
+| `due_diligence` | Full DD check — company, officers, PSC, gazette, disqualification |
+| `charity_due_diligence` | Charity profile + insolvency check |
+| `director_check` | Disqualification status check for an individual |
 
 ---
 

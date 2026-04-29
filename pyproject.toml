@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "uk-due-diligence-mcp"
-version = "1.0.4"
-description = "UK due diligence MCP server — nine tools across five public registers"
+version = "1.0.5"
+description = "UK due diligence MCP server — Companies House, Charity Commission, HMLR, Gazette, HMRC VAT"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -55,11 +55,14 @@ only-include = [
     "server.py",
     "companies_house.py",
     "charity.py",
+    "disqualified.py",
     "land_registry.py",
     "gazette.py",
     "hmrc_vat.py",
+    "search_fetch.py",
+    "prompts.py",
+    "models.py",
     "http_client.py",
-    "inputs.py",
 ]
 
 [tool.hatch.metadata]
