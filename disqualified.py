@@ -57,10 +57,11 @@ def register_tools(mcp: FastMCP) -> None:
         items_per_page: Annotated[int, Field(description="Results per page (max 100). Default 20.", ge=1, le=100)] = 20,
         start_index: Annotated[int, Field(description="Pagination offset (0-based). Default 0.", ge=0, le=10000)] = 0,
     ) -> DisqualifiedSearchResult:
-        """Search Companies House for disqualified directors by PERSON name.
+        """Check whether a named individual is banned from acting as a UK company director.
 
-        IMPORTANT: query must be an individual's name (e.g. "Richard Howson"),
-        NOT a company name — searching by company name always returns zero results.
+        Use this tool when asked to check disqualified, banned, or barred directors.
+        Query must be an individual's name (e.g. "Richard Howson") — NOT a company
+        name, which always returns zero results.
 
         Returns names, dates of birth, disqualification period snippets, and
         officer IDs that can be used with disqualified_profile for full details.
