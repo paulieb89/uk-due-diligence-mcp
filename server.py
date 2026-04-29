@@ -197,6 +197,8 @@ async def stats_endpoint(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat, search_fetch
+import prompts as prompts_module
+from fastmcp.server.transforms import PromptsAsTools
 
 companies_house.register_tools(mcp)
 charity.register_tools(mcp)
@@ -210,6 +212,9 @@ companies_house.register_resources(mcp)
 charity.register_resources(mcp)
 disqualified.register_resources(mcp)
 gazette.register_resources(mcp)
+
+prompts_module.register_prompts(mcp)
+mcp.add_transform(PromptsAsTools(mcp))
 
 # ResourcesAsTools removed — causes ChatGPT to route through read_resource (double-encoded)
 # instead of the named companion tools. Re-add with: mcp.add_transform(ResourcesAsTools(mcp))

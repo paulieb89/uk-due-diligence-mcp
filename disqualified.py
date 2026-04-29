@@ -60,13 +60,10 @@ def register_tools(mcp: FastMCP) -> None:
         """Search Companies House for disqualified directors by PERSON name.
 
         IMPORTANT: query must be an individual's name (e.g. "Richard Howson"),
-        NOT a company name. Searching a company name always returns zero
-        results. Correct workflow: call company_officers first, then call
-        this tool once for each director by their personal name.
+        NOT a company name — searching by company name always returns zero results.
 
         Returns names, dates of birth, disqualification period snippets, and
-        officer IDs that can be used with disqualified_profile for full
-        details.
+        officer IDs that can be used with disqualified_profile for full details.
         """
         try:
             async with companies_house_client() as client:
