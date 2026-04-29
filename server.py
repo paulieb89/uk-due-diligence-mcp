@@ -158,6 +158,11 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "uptime": int(time.time() - SERVER_START)})
 
 
+@mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
+async def smithery_server_card(request: Request) -> JSONResponse:
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.0.5"}})
+
+
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
 async def glama_connector_manifest(request: Request) -> JSONResponse:
     return JSONResponse({
