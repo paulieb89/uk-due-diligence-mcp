@@ -22,7 +22,6 @@ import httpx
 CH_BASE = "https://api.company-information.service.gov.uk"
 CHARITY_BASE = "https://api.charitycommission.gov.uk/register/api"
 GAZETTE_BASE = "https://www.thegazette.co.uk"
-HMLR_BASE = "https://api.landregistry.data.gov.uk/data/ppi"
 HMRC_VAT_BASE = "https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup"
 
 # ---------------------------------------------------------------------------
@@ -134,15 +133,6 @@ def gazette_client() -> httpx.AsyncClient:
     )
 
 
-def hmlr_client() -> httpx.AsyncClient:
-    """HMLR Price Paid / title data — no auth required."""
-    return httpx.AsyncClient(
-        base_url=HMLR_BASE,
-        headers={"Accept": "application/json"},
-        timeout=20.0,
-    )
-
-
 def hmrc_vat_client() -> httpx.AsyncClient:
     """HMRC VAT validation — no auth required."""
     return httpx.AsyncClient(
@@ -160,13 +150,11 @@ __all__ = [
     "companies_house_client",
     "charity_client",
     "gazette_client",
-    "hmlr_client",
     "hmrc_vat_client",
     "_request_with_retry",
     "format_api_error",
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",
-    "HMLR_BASE",
     "HMRC_VAT_BASE",
 ]
