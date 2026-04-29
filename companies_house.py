@@ -320,12 +320,16 @@ def register_tools(mcp: FastMCP) -> None:
     )
     async def company_officers(
         company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+        items_per_page: Annotated[int | None, Field(description="Ignored — pagination is handled internally. Only accepted to avoid call failures.")] = None,
+        start_index: Annotated[int | None, Field(description="Ignored — all officers are returned in one call.")] = None,
     ) -> CompanyOfficersResult:
         """Fetch active officers for a Companies House company number.
 
         Returns directors, secretaries, and other active officers with
         appointment dates, nationality, and country of residence.
-        Resigned officers are excluded.
+        Resigned officers are excluded. Pagination is handled internally —
+        do NOT pass items_per_page or start_index; this tool takes only
+        company_number.
         """
         return await _fetch_company_officers(_normalise_company_number(company_number))
 

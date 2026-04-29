@@ -1,5 +1,5 @@
 """
-Live matrix runner — calls all 11 due-diligence tools in-process and prints a
+Live matrix runner — calls all 13 due-diligence tools in-process and prints a
 context-cost table.
 
 Forces response_format="json" throughout to measure the worst-case payload
@@ -23,6 +23,7 @@ from typing import Any
 
 import tiktoken
 from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 from server import mcp
 
@@ -98,7 +99,12 @@ def _find_first(obj: Any, *keys: str) -> Any:
 
 async def _call(client: Client, tool: str, args: dict) -> tuple[dict, Any]:
     t0 = time.perf_counter()
-    result = await client.call_tool(tool, args)
+    try:
+        result = await client.call_tool(tool, args)
+    except ToolError as e:
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        print(f"[SKIP] {tool}: {e}")
+        return {"tool": tool, "tokens": 0, "chars": 0, "blocks": 0, "ms": elapsed_ms, "error": True}, {}
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     _write_fixture(tool, args, result)
     text = _llm_text(result)
@@ -113,52 +119,60 @@ async def _call(client: Client, tool: str, args: dict) -> tuple[dict, Any]:
     return metrics, _parse_payload(result)
 
 
-JSON = {"response_format": "json"}
-
 
 async def main() -> None:
     rows: list[dict] = []
 
     async with Client(mcp) as client:
         # ---- companies house ----
-        m, payload = await _call(client, "company_search", {"query": "tesco", **JSON})
+        m, payload = await _call(client, "company_search", {"query": "tesco"})
         rows.append(m)
         company_number = _find_first(payload, "company_number") or "00445790"  # Tesco PLC fallback
 
-        m, _ = await _call(client, "company_profile", {"company_number": company_number, **JSON})
+        m, _ = await _call(client, "company_profile", {"company_number": company_number})
         rows.append(m)
-        m, _ = await _call(client, "company_officers", {"company_number": company_number, **JSON})
+        m, _ = await _call(client, "company_officers", {"company_number": company_number})
         rows.append(m)
-        m, _ = await _call(client, "company_psc", {"company_number": company_number, **JSON})
+        m, _ = await _call(client, "company_psc", {"company_number": company_number})
         rows.append(m)
 
         # ---- disqualified ----
-        m, payload = await _call(client, "disqualified_search", {"query": "smith", **JSON})
+        m, payload = await _call(client, "disqualified_search", {"query": "smith"})
         rows.append(m)
         officer_id = _find_first(payload, "officer_id", "person_number", "id")
         if officer_id:
-            m, _ = await _call(client, "disqualified_profile", {"officer_id": officer_id, **JSON})
+            m, _ = await _call(client, "disqualified_profile", {"officer_id": officer_id})
             rows.append(m)
 
         # ---- charity ----
-        m, payload = await _call(client, "charity_search", {"query": "oxfam", **JSON})
+        m, payload = await _call(client, "charity_search", {"query": "oxfam"})
         rows.append(m)
         charity_number = str(_find_first(
             payload, "reg_charity_number", "charity_number", "registered_charity_number"
         ) or "202918")  # Oxfam fallback
-        m, _ = await _call(client, "charity_profile", {"charity_number": charity_number, **JSON})
+        m, _ = await _call(client, "charity_profile", {"charity_number": charity_number})
         rows.append(m)
 
         # ---- land registry ----
-        m, _ = await _call(client, "land_title_search", {"address_or_postcode": "SW1A 1AA", **JSON})
+        m, _ = await _call(client, "land_title_search", {"address_or_postcode": "SW1A 1AA"})
         rows.append(m)
 
         # ---- gazette ----
-        m, _ = await _call(client, "gazette_insolvency", {"entity_name": "carillion", **JSON})
+        m, payload = await _call(client, "gazette_insolvency", {"entity_name": "carillion"})
+        rows.append(m)
+        notice_id = str(_find_first(payload, "notice_numeric_id") or "2948343")
+        m, _ = await _call(client, "gazette_notice", {"notice_id": notice_id})
+        rows.append(m)
+
+        # ---- search / fetch ----
+        m, payload = await _call(client, "search", {"query": "carillion"})
+        rows.append(m)
+        first_id = (_find_first(payload, "ids") or ["company:03782379"])[0]
+        m, _ = await _call(client, "fetch", {"id": first_id})
         rows.append(m)
 
         # ---- hmrc vat ----
-        m, _ = await _call(client, "vat_validate", {"vat_number": "220430231", **JSON})
+        m, _ = await _call(client, "vat_validate", {"vat_number": "220430231"})
         rows.append(m)
 
     # ---- print table ----

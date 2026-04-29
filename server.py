@@ -13,12 +13,13 @@ Data sources:
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (11 search/fetch — all clients including ChatGPT):
+Tools (13 — all clients including ChatGPT):
     company_search, company_profile, company_officers, company_psc
     disqualified_search, disqualified_profile
     charity_search, charity_profile
     gazette_insolvency, gazette_notice
     land_title_search, vat_validate
+    search, fetch
 
 Resources (6 noun/identifier — protocol-compliant clients only):
     company://{company_number}/profile

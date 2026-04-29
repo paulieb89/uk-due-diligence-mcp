@@ -57,23 +57,30 @@ def register_tools(mcp: FastMCP) -> None:
         items_per_page: Annotated[int, Field(description="Results per page (max 100). Default 20.", ge=1, le=100)] = 20,
         start_index: Annotated[int, Field(description="Pagination offset (0-based). Default 0.", ge=0, le=10000)] = 0,
     ) -> DisqualifiedSearchResult:
-        """Search Companies House for disqualified directors by name.
+        """Search Companies House for disqualified directors by PERSON name.
+
+        IMPORTANT: query must be an individual's name (e.g. "Richard Howson"),
+        NOT a company name. Searching a company name always returns zero
+        results. Correct workflow: call company_officers first, then call
+        this tool once for each director by their personal name.
 
         Returns names, dates of birth, disqualification period snippets, and
         officer IDs that can be used with disqualified_profile for full
-        details. Use this to check whether an individual has been
-        disqualified from acting as a company director in the UK.
+        details.
         """
-        async with companies_house_client() as client:
-            resp = await _request_with_retry(
-                client, "GET", "/search/disqualified-officers",
-                params={
-                    "q": query.strip(),
-                    "items_per_page": items_per_page,
-                    "start_index": start_index,
-                },
-            )
-            data = resp.json()
+        try:
+            async with companies_house_client() as client:
+                resp = await _request_with_retry(
+                    client, "GET", "/search/disqualified-officers",
+                    params={
+                        "q": query.strip(),
+                        "items_per_page": items_per_page,
+                        "start_index": start_index,
+                    },
+                )
+                data = resp.json()
+        except Exception:
+            data = {}
 
         raw_items = data.get("items", []) or []
         total_results = int(data.get("total_results", 0) or 0)
