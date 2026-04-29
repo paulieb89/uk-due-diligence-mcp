@@ -19,7 +19,7 @@ def register_prompts(mcp: FastMCP) -> None:
             "with their personal name (not the company name)\n"
             "4. For any disqualified_search hits, call disqualified_profile for "
             "the full record\n"
-            "5. For any gazette notices, call gazette_notice for the full legal wording\n"
+            "5. For any gazette notices, you may call gazette_notice to retrieve the full legal wording\n"
             "Summarise all findings with a risk assessment."
         )
 
@@ -34,7 +34,7 @@ def register_prompts(mcp: FastMCP) -> None:
             "1. charity_search — find the charity and confirm the charity number\n"
             "2. charity_profile — fetch the full record including trustees, "
             "income/expenditure, and insolvency flags\n"
-            "3. gazette_insolvency — check for any insolvency notices\n"
+            "3. gazette_insolvency — search by the charity name for any insolvency notices\n"
             "Summarise findings including financial health and governance flags."
         )
 
