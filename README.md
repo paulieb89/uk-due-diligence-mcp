@@ -12,6 +12,7 @@ Every data source is a legally-mandated register with a free official API.
 [![SafeSkill](https://safeskill.dev/api/badge/paulieb89-uk-due-diligence-mcp)](https://safeskill.dev/scan/paulieb89-uk-due-diligence-mcp)
 [![uk-due-diligence-mcp MCP server](https://glama.ai/mcp/servers/paulieb89/uk-due-diligence-mcp/badges/card.svg)](https://glama.ai/mcp/servers/paulieb89/uk-due-diligence-mcp)
 [![smithery badge](https://smithery.ai/badge/bouch/uk-due-diligence)](https://smithery.ai/servers/bouch/uk-due-diligence)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=uk-due-diligence&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22https%3A%2F%2Fuk-due-diligence-mcp.fly.dev%2Fmcp%22%7D)
 
 ---
 
