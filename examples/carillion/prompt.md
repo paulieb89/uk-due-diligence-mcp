@@ -1,0 +1,1 @@
+Run a due diligence check on Carillion PLC. Search Companies House, check for insolvency notices on the Gazette, and look up any disqualified directors associated with the company.    
