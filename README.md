@@ -60,51 +60,9 @@ Three workflow prompts orchestrate multi-step investigations. Available via `get
 
 ---
 
-## Setup
+## Connect
 
-### Install from PyPI
-
-```bash
-pip install uk-due-diligence-mcp
-```
-
-### API Keys
-
-| Key | Where to get it |
-|-----|----------------|
-| `CH_API_KEY` | [developer.company-information.service.gov.uk](https://developer.company-information.service.gov.uk) — free |
-| `CHARITY_API_KEY` | [api-portal.charitycommission.gov.uk](https://api-portal.charitycommission.gov.uk) — free |
-
-HMLR, Gazette, and HMRC VAT require no API key.
-
-### Local development
-
-```bash
-git clone https://github.com/paulieb89/uk-due-diligence-mcp
-cd uk-due-diligence-mcp
-
-cp .env.example .env
-# Fill in your API keys
-
-pip install -e .
-python server.py
-```
-
-Server starts at `http://localhost:8080/mcp`.
-
-### Fly.io deployment
-
-```bash
-fly launch --name uk-due-diligence-mcp --region lhr
-fly secrets set CH_API_KEY=xxx CHARITY_API_KEY=xxx
-fly deploy
-```
-
----
-
-## Connecting
-
-### Claude Code / .mcp.json
+### Hosted (no install)
 
 ```json
 {
@@ -117,17 +75,33 @@ fly deploy
 }
 ```
 
-### Claude.ai / other MCP clients
+### Local (uvx)
+
+```bash
+export CH_API_KEY=your_key
+export CHARITY_API_KEY=your_key
+```
 
 ```json
 {
   "mcpServers": {
     "uk-due-diligence": {
-      "url": "https://uk-due-diligence-mcp.fly.dev/mcp"
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["uk-due-diligence-mcp"]
     }
   }
 }
 ```
+
+### API Keys
+
+| Key | Where to get it |
+|-----|----------------|
+| `CH_API_KEY` | [developer.company-information.service.gov.uk](https://developer.company-information.service.gov.uk) — free |
+| `CHARITY_API_KEY` | [api-portal.charitycommission.gov.uk](https://api-portal.charitycommission.gov.uk) — free |
+
+HMLR, Gazette, and HMRC VAT require no API key.
 
 ---
 
