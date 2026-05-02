@@ -8,13 +8,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps first (better layer caching)
+# Keep in sync with pyproject.toml [project.dependencies]
 COPY pyproject.toml .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir \
-        "fastmcp>=2.0.0" \
-        "httpx>=0.27.0" \
-        "pydantic>=2.7.0" \
-        "python-dotenv>=1.0.0" \
+        "fastmcp==3.2.4" \
+        "mcp==1.27.0" \
+        "httpx==0.28.1" \
+        "pydantic==2.13.0" \
+        "python-dotenv==1.2.2" \
         "prometheus-client==0.24.1"
 
 # Copy application code
