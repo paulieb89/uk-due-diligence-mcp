@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir --upgrade pip \
         "fastmcp>=2.0.0" \
         "httpx>=0.27.0" \
         "pydantic>=2.7.0" \
-        "python-dotenv>=1.0.0"
+        "python-dotenv>=1.0.0" \
+        "prometheus-client==0.24.1"
 
 # Copy application code
 COPY . .
