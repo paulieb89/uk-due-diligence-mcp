@@ -30,3 +30,7 @@ primary_region = "lhr"  # London — closest to CH/Gazette APIs
 [[vm]]
   size = "shared-cpu-1x"
   memory = "256mb"
+
+[metrics]
+  port = 8080
+  path = "/metrics"

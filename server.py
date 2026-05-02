@@ -35,14 +35,13 @@ from __future__ import annotations
 import os
 import sys
 import time
-from collections import defaultdict
-from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from prometheus_client import CONTENT_TYPE_LATEST, Counter as PromCounter, Histogram, generate_latest
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 # Load .env for local development
 load_dotenv()
@@ -60,72 +59,44 @@ def _require_env(key: str, required: bool = True) -> str | None:
 
 MCP_SERVER_KEY = _require_env("MCP_SERVER_KEY", required=False)
 PORT = int(os.environ.get("PORT", "8080"))
-SERVER_START = time.time()
+
+TRANSPORT = os.getenv("FASTMCP_TRANSPORT", "http")
+REGION = os.getenv("FLY_REGION", "local")
 
 # ---------------------------------------------------------------------------
-# In-memory stats
+# Prometheus metrics
 # ---------------------------------------------------------------------------
 
-stats: dict = {
-    "total_calls": 0,
-    "total_errors": 0,
-    "tools": defaultdict(lambda: {
-        "calls": 0,
-        "errors": 0,
-        "total_time": 0.0,
-        "last_called": None,
-        "last_args": None,
-    }),
-    "recent": [],  # last 50 calls
-}
+tool_calls_total = PromCounter(
+    "uk_due_diligence_tool_calls_total",
+    "Count of MCP tool invocations.",
+    labelnames=["tool", "transport", "region", "status"],
+)
+tool_duration_seconds = Histogram(
+    "uk_due_diligence_tool_duration_seconds",
+    "Tool invocation latency in seconds.",
+    labelnames=["tool", "transport", "region"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
 
 
-# ---------------------------------------------------------------------------
-# Tool call logging middleware
-# ---------------------------------------------------------------------------
+class PrometheusMiddleware(Middleware):
+    """Emit fleet-standard Prometheus metrics on every tool call."""
 
-class ToolLogger(Middleware):
     async def on_call_tool(self, context: MiddlewareContext, call_next):
         tool_name = context.message.name
-        args = context.message.arguments or {}
-        arg_summary = ", ".join(
-            f"{k}={repr(v)[:60]}" for k, v in args.items()
-        )
-        t0 = time.time()
-        print(f"[TOOL] {tool_name}({arg_summary})", file=sys.stderr, flush=True)
-
-        error = False
+        t0 = time.perf_counter()
         try:
             result = await call_next(context)
+            tool_calls_total.labels(tool_name, TRANSPORT, REGION, "ok").inc()
             return result
-        except Exception:
-            error = True
+        except BaseException:
+            tool_calls_total.labels(tool_name, TRANSPORT, REGION, "error").inc()
             raise
         finally:
-            elapsed = time.time() - t0
-            print(f"[TOOL] {tool_name} -> {elapsed:.1f}s", file=sys.stderr, flush=True)
-
-            # Update stats
-            stats["total_calls"] += 1
-            if error:
-                stats["total_errors"] += 1
-            t = stats["tools"][tool_name]
-            t["calls"] += 1
-            if error:
-                t["errors"] += 1
-            t["total_time"] += elapsed
-            t["last_called"] = datetime.now(timezone.utc).isoformat()
-            t["last_args"] = arg_summary[:120]
-
-            stats["recent"].append({
-                "tool": tool_name,
-                "args": arg_summary[:120],
-                "time": f"{elapsed:.2f}s",
-                "error": error,
-                "at": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-            })
-            if len(stats["recent"]) > 50:
-                stats["recent"] = stats["recent"][-50:]
+            tool_duration_seconds.labels(tool_name, TRANSPORT, REGION).observe(
+                time.perf_counter() - t0
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +105,7 @@ class ToolLogger(Middleware):
 
 mcp = FastMCP(
     name="uk_due_diligence_mcp",
-    middleware=[ToolLogger()],
+    middleware=[PrometheusMiddleware()],
     instructions=(
         "UK due diligence server covering 5 official government registers: "
         "Companies House, Charity Commission, HMLR Land Registry, The Gazette, and HMRC VAT. "
@@ -155,12 +126,12 @@ mcp = FastMCP(
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "uptime": int(time.time() - SERVER_START)})
+    return JSONResponse({"status": "ok"})
 
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.0.5"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.0.6"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -171,30 +142,9 @@ async def glama_connector_manifest(request: Request) -> JSONResponse:
     })
 
 
-@mcp.custom_route("/stats", methods=["GET"])
-async def stats_endpoint(request: Request) -> JSONResponse:
-    uptime = int(time.time() - SERVER_START)
-    tools = {}
-    for name in sorted(stats["tools"]):
-        t = stats["tools"][name]
-        tools[name] = {
-            "calls": t["calls"],
-            "errors": t["errors"],
-            "avg_time": round(t["total_time"] / t["calls"], 3) if t["calls"] else 0,
-            "last_called": t["last_called"],
-            "last_args": t["last_args"],
-        }
-    return JSONResponse(
-        {
-            "server": "uk-due-diligence-mcp",
-            "uptime_seconds": uptime,
-            "total_calls": stats["total_calls"],
-            "total_errors": stats["total_errors"],
-            "tools": tools,
-            "recent": list(reversed(stats["recent"])),
-        },
-        headers={"Access-Control-Allow-Origin": "*"},
-    )
+@mcp.custom_route("/metrics", methods=["GET"])
+async def metrics_endpoint(request: Request) -> Response:
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------
