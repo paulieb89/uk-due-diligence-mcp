@@ -131,7 +131,7 @@ async def health(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.0.6"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.0.8"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -179,19 +179,52 @@ mcp.add_transform(PromptsAsTools(mcp))
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+class _AcceptNormalizer:
+    """Stamp Accept to the MCP-spec value on /mcp only, so json_response=True never 406s.
+
+    Anthropic sends mixed Accept headers per request type (application/json for
+    initialize, text/event-stream for tools/list). Only stamp the MCP endpoint —
+    leave /metrics, /health, /.well-known/* with their original Accept headers.
+    """
+    def __init__(self, app, mcp_path: bytes = b"/mcp"):
+        self.app = app
+        self._mcp_path = mcp_path.rstrip(b"/")
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path", "").rstrip("/").encode() == self._mcp_path:
+            headers = [
+                (b"accept", b"application/json, text/event-stream")
+                if name.lower() == b"accept"
+                else (name, value)
+                for name, value in scope.get("headers", [])
+            ]
+            scope = {**scope, "headers": headers}
+        await self.app(scope, receive, send)
+
+
 def main() -> None:
     """Run the MCP server with streamable HTTP transport."""
+    import uvicorn
+    from fastmcp.server.http import create_streamable_http_app
+
     print(
         f"[uk_due_diligence_mcp] Starting on port {PORT} (streamable HTTP, stateless)",
         file=sys.stderr,
     )
-    mcp.run(
-        transport="streamable-http",
+    app = create_streamable_http_app(
+        mcp,
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+    )
+    uvicorn.run(
+        _AcceptNormalizer(app),
         host="0.0.0.0",
         port=PORT,
-        path="/mcp",
-        stateless_http=True,
-        json_response=True,
+        forwarded_allow_ips="*",
+        proxy_headers=True,
+        lifespan="on",
+        log_level="info",
     )
 
 
