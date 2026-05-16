@@ -179,6 +179,47 @@ mcp.add_transform(PromptsAsTools(mcp))
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+class _HttpGuard:
+    """Return a held-open SSE stream for GET /mcp; 405 for DELETE /mcp.
+
+    claude.ai probes GET /mcp to establish an SSE stream before sending MCP
+    protocol messages via POST. With stateless_http=True FastMCP only registers
+    POST routes, so GET returns 405 — claude.ai treats this as a connection
+    failure even though POST works fine.
+
+    Fix: intercept GET /mcp and return 200 text/event-stream held open until
+    the client disconnects. FastMCP never sees the GET; stateless semantics
+    are preserved. DELETE is rejected (405) — stateless servers have no sessions.
+    """
+
+    def __init__(self, app, mcp_path: bytes = b"/mcp"):
+        self.app = app
+        self._mcp_path = mcp_path.rstrip(b"/")
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            path = scope.get("path", "").rstrip("/").encode()
+            method = scope.get("method", "").upper().encode()
+            if path == self._mcp_path:
+                if method == b"GET":
+                    await send({"type": "http.response.start", "status": 200, "headers": [
+                        (b"content-type", b"text/event-stream"),
+                        (b"cache-control", b"no-cache"),
+                        (b"connection", b"keep-alive"),
+                    ]})
+                    await send({"type": "http.response.body", "body": b"", "more_body": True})
+                    while True:
+                        event = await receive()
+                        if event["type"] == "http.disconnect":
+                            break
+                    return
+                if method == b"DELETE":
+                    from starlette.responses import Response as StarletteResponse
+                    await StarletteResponse("Method Not Allowed", status_code=405, headers={"Allow": "POST"})(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
+
+
 class _AcceptNormalizer:
     """Stamp Accept to the MCP-spec value on /mcp only, so json_response=True never 406s.
 
@@ -218,7 +259,7 @@ def main() -> None:
         stateless_http=True,
     )
     uvicorn.run(
-        _AcceptNormalizer(app),
+        _HttpGuard(_AcceptNormalizer(app)),
         host="0.0.0.0",
         port=PORT,
         forwarded_allow_ips="*",
