@@ -24,6 +24,15 @@ CHARITY_BASE = "https://api.charitycommission.gov.uk/register/api"
 GAZETTE_BASE = "https://www.thegazette.co.uk"
 HMRC_VAT_BASE = "https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup"
 
+# Consolidated sanctions lists. Unlike the other registers these are NOT per-entity
+# query APIs — they are bulk files (CSV/XML, 2-25 MB) fetched whole and indexed by
+# sanctions.py. No auth: the EU list carries a fixed public token in the URL; the UN
+# list 302-redirects to a time-limited blob (hence follow_redirects on the client).
+OFSI_CONLIST_URL = "https://ofsistorage.blob.core.windows.net/publishlive/2022format/ConList.csv"
+OFAC_SDN_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML"
+EU_FSF_URL = "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw"
+UN_CONSOLIDATED_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
+
 # ---------------------------------------------------------------------------
 # Retry config
 # ---------------------------------------------------------------------------
@@ -142,6 +151,20 @@ def hmrc_vat_client() -> httpx.AsyncClient:
     )
 
 
+def sanctions_client() -> httpx.AsyncClient:
+    """Streaming client for the bulk consolidated sanctions files.
+
+    No base_url — each list is a full URL on a different host. No auth. Long read
+    timeout for 2-25 MB downloads; follow_redirects for the UN list's blob hop.
+    Callers stream the body to a temp file and parse from disk to bound memory.
+    """
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0, connect=15.0),
+        follow_redirects=True,
+        headers={"User-Agent": "uk-due-diligence-mcp/sanctions (paul@bouch.dev)"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Re-export helpers for tools
 # ---------------------------------------------------------------------------
@@ -151,10 +174,15 @@ __all__ = [
     "charity_client",
     "gazette_client",
     "hmrc_vat_client",
+    "sanctions_client",
     "_request_with_retry",
     "format_api_error",
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",
     "HMRC_VAT_BASE",
+    "OFSI_CONLIST_URL",
+    "OFAC_SDN_URL",
+    "EU_FSF_URL",
+    "UN_CONSOLIDATED_URL",
 ]

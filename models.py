@@ -797,3 +797,91 @@ class VATValidationResult(BaseModel):
         None,
         description="HMRC consultation reference number for this lookup.",
     )
+
+
+# =============================================================================
+# Sanctions / watchlists (consolidated OFSI + OFAC + EU + UN lists)
+# =============================================================================
+
+
+class SanctionsHit(BaseModel):
+    """A single sanctions-list entry matching a screened name."""
+
+    model_config = BASE_CFG
+
+    list_source: str = Field(
+        ...,
+        description="Which consolidated list matched: 'OFSI (UK)', 'OFAC (US)', 'EU', or 'UN'.",
+    )
+    matched_name: str = Field(
+        ...,
+        description="The exact name or alias on the list that matched the query.",
+    )
+    is_alias: bool = Field(
+        False,
+        description="True if the match was on an alias/AKA rather than the primary listed name.",
+    )
+    entity_type: str | None = Field(
+        None,
+        description="'person' or 'entity' where the source distinguishes it; otherwise null.",
+    )
+    regime: str | None = Field(
+        None,
+        description="Sanctions programme/regime the listing falls under (e.g. 'Russia', 'CUBA', 'DRC').",
+    )
+    reference: str | None = Field(
+        None,
+        description=(
+            "The source's own reference for the listing (OFSI Group ID, OFAC uid, "
+            "EU reference number, or UN reference number)."
+        ),
+    )
+    listed_on: str | None = Field(
+        None,
+        description="Date the entity was listed, where the source provides it (ISO YYYY-MM-DD).",
+    )
+
+
+class SanctionsScreenResult(BaseModel):
+    """Result of screening one name against the consolidated sanctions lists."""
+
+    model_config = BASE_CFG
+
+    query: str = Field(..., description="The name that was screened.")
+    normalized_query: str = Field(
+        ...,
+        description=(
+            "The normalised form used for matching (upper-cased, accent- and "
+            "punctuation-stripped, whitespace-collapsed)."
+        ),
+    )
+    entity_type_filter: str | None = Field(
+        None,
+        description="entity_type filter applied to the screen ('person'/'entity'), or null.",
+    )
+    match_count: int = Field(
+        ..., description="Number of list entries that matched the query."
+    )
+    lists_screened: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Which consolidated lists were loaded and actually screened for this call. "
+            "A list absent here failed to load and was NOT screened — treat the result "
+            "as partial if any of OFSI/OFAC/EU/UN is missing."
+        ),
+    )
+    as_at: str | None = Field(
+        None,
+        description=(
+            "When this server last refreshed the loaded lists (ISO timestamp). "
+            "Provenance for the screen — the lists update on designation."
+        ),
+    )
+    hits: list[SanctionsHit] = Field(
+        default_factory=list,
+        description=(
+            "Matching list entries. An empty list means no exact/alias match on the "
+            "screened lists — NOT a guarantee of clearance (see the tool description "
+            "on matching limits)."
+        ),
+    )

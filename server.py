@@ -10,15 +10,17 @@ Data sources:
   - HMLR Land Registry Linked Data (unauthenticated)
   - The Gazette API (unauthenticated)
   - HMRC VAT Check API (HMRC_CLIENT_ID + HMRC_CLIENT_SECRET, application-restricted)
+  - Consolidated sanctions lists: OFSI (UK), OFAC (US), EU, UN (unauthenticated bulk files)
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (13 — all clients including ChatGPT):
+Tools (14 — all clients including ChatGPT):
     company_search, company_profile, company_officers, company_psc
     disqualified_search, disqualified_profile
     charity_search, charity_profile
     gazette_insolvency, gazette_notice
     land_title_search, vat_validate
+    sanctions_screen
     search, fetch
 
 Resources (6 noun/identifier — protocol-compliant clients only):
@@ -107,12 +109,15 @@ mcp = FastMCP(
     name="uk_due_diligence_mcp",
     middleware=[PrometheusMiddleware()],
     instructions=(
-        "UK due diligence server covering 5 official government registers: "
-        "Companies House, Charity Commission, HMLR Land Registry, The Gazette, and HMRC VAT. "
+        "UK due diligence server covering official government registers plus consolidated "
+        "sanctions lists: Companies House, Charity Commission, HMLR Land Registry, The Gazette, "
+        "HMRC VAT, and the OFSI/OFAC/EU/UN sanctions lists. "
         "Use company_search, charity_search, disqualified_search, gazette_insolvency, "
         "vat_validate, and land_title_search to find entities and notices; "
         "use the companion tools (company_profile, company_officers, company_psc, "
         "charity_profile, disqualified_profile, gazette_notice) to fetch full records. "
+        "Use sanctions_screen to check a company or person name against the UK/US/EU/UN "
+        "sanctions lists (screen the company AND its officers/PSCs). "
         "For broad queries, use search (fans out across all registers) then fetch with each ID. "
         "IMPORTANT: disqualified_search takes a person's name — not a company name. "
         "IMPORTANT: All data is sourced directly from official government APIs — "
@@ -131,7 +136,7 @@ async def health(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.0.8"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.1.0"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -151,7 +156,7 @@ async def metrics_endpoint(request: Request) -> Response:
 # Register all tools
 # ---------------------------------------------------------------------------
 
-import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat, search_fetch
+import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat, sanctions, search_fetch
 import prompts as prompts_module
 from fastmcp.server.transforms import PromptsAsTools
 
@@ -161,6 +166,7 @@ disqualified.register_tools(mcp)
 land_registry.register_tools(mcp)
 gazette.register_tools(mcp)
 hmrc_vat.register_tools(mcp)
+sanctions.register_tools(mcp)
 search_fetch.register_tools(mcp)
 
 companies_house.register_resources(mcp)
@@ -258,6 +264,9 @@ def main() -> None:
         json_response=True,
         stateless_http=True,
     )
+    # Warm the sanctions list index on boot (fire-and-forget; lazy-loads otherwise).
+    if hasattr(app, "add_event_handler"):
+        app.add_event_handler("startup", sanctions.warm_cache)
     uvicorn.run(
         _HttpGuard(_AcceptNormalizer(app)),
         host="0.0.0.0",
