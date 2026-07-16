@@ -34,6 +34,7 @@ Resources (6 noun/identifier — protocol-compliant clients only):
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -80,6 +81,39 @@ tool_duration_seconds = Histogram(
     labelnames=["tool", "transport", "region"],
     buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
+client_connections_total = PromCounter(
+    "uk_due_diligence_client_connections_total",
+    "Count of MCP client initialize handshakes.",
+    labelnames=["client_name", "client_version", "transport", "region"],
+)
+
+_log = logging.getLogger("fastmcp.uk_due_diligence_mcp.clients")
+
+
+class ClientTrackingMiddleware(Middleware):
+    """Log clientInfo and increment connection counter on every initialize.
+
+    Ported verbatim from uk-legal-mcp's gateway, where it is the only thing that
+    can answer "who actually uses this?" — this server is open and unauthenticated,
+    so the initialize handshake's clientInfo is the ONLY identity a caller offers.
+    Without it, BOUCH's own agents (lead-scout et al call company_search on every
+    scan) are indistinguishable from third-party users, and company_search is the
+    busiest tool in the fleet. Counts handshakes, not tool calls: a client label on
+    tool_calls_total would multiply cardinality by every distinct client seen
+    (uk-legal tracks 147), so connection-level is the deliberate trade.
+    """
+
+    async def on_request(self, context: MiddlewareContext, call_next):
+        result = await call_next(context)
+        if context.method == "initialize":
+            params = context.message.params
+            info = getattr(params, "clientInfo", None)
+            client_name = getattr(info, "name", "unknown") or "unknown"
+            client_version = getattr(info, "version", "unknown") or "unknown"
+            _log.info("client_connected client=%s version=%s transport=%s region=%s",
+                      client_name, client_version, TRANSPORT, REGION)
+            client_connections_total.labels(client_name, client_version, TRANSPORT, REGION).inc()
+        return result
 
 
 class PrometheusMiddleware(Middleware):
@@ -107,7 +141,7 @@ class PrometheusMiddleware(Middleware):
 
 mcp = FastMCP(
     name="uk_due_diligence_mcp",
-    middleware=[PrometheusMiddleware()],
+    middleware=[ClientTrackingMiddleware(), PrometheusMiddleware()],
     instructions=(
         "UK due diligence server covering official government registers plus consolidated "
         "sanctions lists: Companies House, Charity Commission, HMLR Land Registry, The Gazette, "
