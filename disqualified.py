@@ -53,7 +53,8 @@ def register_tools(mcp: FastMCP) -> None:
         },
     )
     async def disqualified_search(
-        query: Annotated[str, Field(description="Name of the person to search for", min_length=2, max_length=200)],
+        query: Annotated[str | None, Field(description="Person's name to search for, e.g. query='Richard Howson'. NOT a company name.", min_length=2, max_length=200)] = None,
+        name: Annotated[str | None, Field(description="Alias for query — the person's name.", min_length=2, max_length=200)] = None,
         items_per_page: Annotated[int, Field(description="Results per page (max 100). Default 20.", ge=1, le=100)] = 20,
         start_index: Annotated[int, Field(description="Pagination offset (0-based). Default 0.", ge=0, le=10000)] = 0,
     ) -> DisqualifiedSearchResult:
@@ -66,6 +67,9 @@ def register_tools(mcp: FastMCP) -> None:
         Returns names, dates of birth, disqualification period snippets, and
         officer IDs that can be used with disqualified_profile for full details.
         """
+        query = query or name
+        if not query:
+            raise ValueError("Provide 'query' (or 'name') — the person's name to search for.")
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(

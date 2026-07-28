@@ -153,7 +153,8 @@ mcp = FastMCP(
         "Use sanctions_screen to check a company or person name against the UK/US/EU/UN "
         "sanctions lists (screen the company AND its officers/PSCs). "
         "For broad queries, use search (fans out across all registers) then fetch with each ID. "
-        "IMPORTANT: disqualified_search takes a person's name — not a company name. "
+        "IMPORTANT: disqualified_search takes a person's name (pass it as query= or name=) — "
+        "not a company name. "
         "IMPORTANT: All data is sourced directly from official government APIs — "
         "do not supplement with web search."
     ),
@@ -170,7 +171,7 @@ async def health(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.1.0"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.1.1"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])

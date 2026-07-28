@@ -24,6 +24,7 @@ due diligence signal.
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Annotated, Any
 
@@ -83,6 +84,13 @@ async def _get_bearer_token() -> str:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
+        if resp.status_code in (400, 401):
+            raise ValueError(
+                f"HMRC API credentials invalid or expired (HMRC_ENV={_hmrc_env()}). "
+                "Check the HMRC_CLIENT_ID / HMRC_CLIENT_SECRET secrets match an "
+                "application registered for this environment at "
+                "https://developer.service.hmrc.gov.uk"
+            )
         resp.raise_for_status()
         data = resp.json()
 
@@ -122,21 +130,32 @@ def register_tools(mcp: FastMCP) -> None:
         },
     )
     async def vat_validate(
-        vat_number: Annotated[str, Field(description="UK VAT registration number. Accepts: 'GB123456789', '123456789', 'GB 123 456 789'. GB prefix and spaces normalised automatically.", min_length=9, max_length=15)],
+        vat_number: Annotated[str, Field(description="UK (GB) VAT registration number — this tool validates UK numbers only. Accepts: 'GB123456789', '123456789', 'GB 123 456 789'. GB prefix and spaces normalised automatically.", min_length=9, max_length=15)],
     ) -> VATValidationResult:
-        """Validate a UK VAT number against the HMRC register.
+        """Validate a UK (GB) VAT number against the HMRC register. UK numbers only.
 
         Returns the trading name and address as registered with HMRC for VAT
         purposes. The VAT-registered trading address often differs from the
         Companies House registered address — that discrepancy is a due
         diligence signal worth noting.
+
+        Non-UK (EU) VAT numbers cannot be validated here — use the EU VIES
+        service for other member states.
         """
-        # Normalise VAT number: strip GB prefix, spaces, hyphens
-        clean_vat = vat_number.upper().replace("GB", "").replace(" ", "").replace("-", "")
+        # Normalise VAT number: strip spaces/hyphens, then a leading GB prefix
+        clean_vat = re.sub(r"[\s-]", "", vat_number.upper())
+        if clean_vat.startswith("GB"):
+            clean_vat = clean_vat[2:]
+        if re.match(r"^[A-Z]{2}", clean_vat):
+            raise ValueError(
+                f"'{vat_number}' looks like a non-UK (EU) VAT number. "
+                "This tool validates UK (GB) numbers only via HMRC — use the "
+                "EU VIES service for other member states."
+            )
         if not clean_vat.isdigit() or len(clean_vat) != 9:
             raise ValueError(
-                f"Invalid VAT number format: '{vat_number}'. "
-                "Must be 9 digits after removing 'GB' prefix and spaces."
+                f"Invalid UK VAT number format: '{vat_number}'. "
+                "Must be 9 digits after removing the 'GB' prefix and spaces."
             )
         vat_number = clean_vat
 

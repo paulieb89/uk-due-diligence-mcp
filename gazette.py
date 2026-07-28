@@ -184,7 +184,9 @@ def register_tools(mcp: FastMCP) -> None:
         },
     )
     async def gazette_insolvency(
-        entity_name: Annotated[str, Field(description="Company or individual name to search for in Gazette insolvency notices", min_length=2, max_length=200)],
+        name: Annotated[str | None, Field(description="Company or individual name to search for in Gazette insolvency notices", min_length=2, max_length=200)] = None,
+        query: Annotated[str | None, Field(description="Alias for name.", min_length=2, max_length=200)] = None,
+        entity_name: Annotated[str | None, Field(description="Deprecated alias for name.", min_length=2, max_length=200)] = None,
         notice_type: Annotated[str | None, Field(description="Filter by notice code (e.g. '2441' winding-up petition, '2443' winding-up order, '2448' administration order, '2460' striking-off). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
@@ -204,6 +206,9 @@ def register_tools(mcp: FastMCP) -> None:
         The Gazette is the official UK public record. A notice here means
         the event has been formally published and is legally effective.
         """
+        entity_name = name or query or entity_name
+        if not entity_name:
+            raise ValueError("Provide 'name' (or 'query') — the company or individual name to search for.")
         qs: dict[str, Any] = {
             "text": entity_name,
             "results-page-size": 100,
