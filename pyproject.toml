@@ -7,7 +7,7 @@ name = "uk-due-diligence-mcp"
 version = "1.1.1"
 description = "UK due diligence MCP server — Companies House, Charity Commission, HMLR, Gazette, HMRC VAT"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
     { name = "Paul Boucher" },
@@ -18,7 +18,6 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -31,6 +30,7 @@ dependencies = [
     "pydantic==2.13.0",
     "python-dotenv==1.2.2",
     "prometheus-client==0.24.1",
+    "mcpfleet-obs",
 ]
 
 [project.urls]
@@ -68,3 +68,6 @@ only-include = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.uv.sources]
+mcpfleet-obs = { path = "../mcpfleet-obs", editable = true }
