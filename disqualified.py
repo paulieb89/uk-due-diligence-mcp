@@ -15,8 +15,10 @@ from typing import Annotated, Any
 import httpx
 from pydantic import Field
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from http_client import _request_with_retry, companies_house_client
+from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 from models import (
     DisqualificationOrder,
     DisqualifiedProfile,
@@ -69,7 +71,12 @@ def register_tools(mcp: FastMCP) -> None:
         """
         query = query or name
         if not query:
-            raise ValueError("Provide 'query' (or 'name') — the person's name to search for.")
+            raise_tool_error(
+                "validation",
+                is_retryable=False,
+                attempted="disqualified_search(query=None)",
+                description="Provide 'query' (or 'name') — the person's name to search for.",
+            )
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(
@@ -81,8 +88,13 @@ def register_tools(mcp: FastMCP) -> None:
                     },
                 )
                 data = resp.json()
-        except Exception:
-            data = {}
+        except ToolError:
+            # Already a structured fleet error (e.g. missing CH_API_KEY,
+            # persistent 429/503) — propagate as-is rather than masking it
+            # as an empty, isError=False result.
+            raise
+        except Exception as exc:
+            raise_http_tool_error(exc, attempted="GET /search/disqualified-officers")
 
         raw_items = data.get("items", []) or []
         total_results = int(data.get("total_results", 0) or 0)

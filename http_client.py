@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 import httpx
 
+from mcpfleet_obs import raise_http_tool_error, raise_tool_error
+
 # ---------------------------------------------------------------------------
 # Base URLs
 # ---------------------------------------------------------------------------
@@ -41,12 +43,17 @@ BACKOFF_BASE = 1.5  # seconds
 
 
 def _get_env(key: str, required: bool = True) -> Optional[str]:
-    """Read an env var; raise on missing if required=True."""
+    """Read an env var; raise a structured configuration error if missing and required."""
     val = os.environ.get(key)
     if required and not val:
-        raise RuntimeError(
-            f"Missing required environment variable: {key}. "
-            f"Set it via --env or fly.toml [env] section."
+        raise_tool_error(
+            "configuration",
+            is_retryable=False,
+            attempted=key,
+            description=(
+                f"Missing required environment variable: {key}. "
+                f"Set it via --env or fly.toml [env] section."
+            ),
         )
     return val
 
@@ -58,48 +65,64 @@ async def _request_with_retry(
     **kwargs: Any,
 ) -> httpx.Response:
     """Make an HTTP request with exponential backoff on 429/503."""
+    attempted = f"{method} {url.split('?', 1)[0]}"
     last_exc: Optional[Exception] = None
+    last_retryable_status: Optional[int] = None
+    # Which tracker fired most recently — decides which one classifies the
+    # final failure when retries exhaust with both set (e.g. a RequestError
+    # on an early attempt followed by a persistent 429/503 on the last one).
+    last_was_status = False
     for attempt in range(MAX_RETRIES):
         try:
             resp = await client.request(method, url, **kwargs)
             if resp.status_code in (429, 503):
+                last_retryable_status = resp.status_code
+                last_was_status = True
                 wait = BACKOFF_BASE ** attempt
                 await asyncio.sleep(wait)
                 continue
             resp.raise_for_status()
             return resp
         except httpx.HTTPStatusError as exc:
-            last_exc = exc
-            if exc.response.status_code not in (429, 503):
-                raise
+            # raise_for_status() above is only ever reached for a status
+            # code NOT already in (429, 503) — those are handled by the
+            # branch above without raising. So any HTTPStatusError caught
+            # here is terminal for this loop: route it through the fleet
+            # error taxonomy immediately instead of retrying or re-raising
+            # the raw httpx exception.
+            raise_http_tool_error(exc, attempted=attempted)
         except httpx.RequestError as exc:
             last_exc = exc
+            last_was_status = False
             await asyncio.sleep(BACKOFF_BASE ** attempt)
 
-    raise last_exc  # type: ignore[misc]
-
-
-def format_api_error(exc: Exception, context: str = "") -> str:
-    """Return a structured, agent-friendly error string."""
-    prefix = f"[{context}] " if context else ""
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        if status == 400:
-            return f"{prefix}Error 400: Bad request — check your input parameters."
-        if status == 401:
-            return f"{prefix}Error 401: Unauthorised — verify your API key is set correctly."
-        if status == 404:
-            return f"{prefix}Error 404: Not found — the entity may not exist in this register."
-        if status == 429:
-            return f"{prefix}Error 429: Rate limit exceeded — reduce request frequency."
-        if status == 503:
-            return f"{prefix}Error 503: Service unavailable — the register API may be down."
-        return f"{prefix}Error {status}: API request failed."
-    if isinstance(exc, httpx.TimeoutException):
-        return f"{prefix}Timeout: The register API did not respond in time."
-    if isinstance(exc, httpx.RequestError):
-        return f"{prefix}Network error: {type(exc).__name__} — {exc}"
-    return f"{prefix}Unexpected error: {type(exc).__name__} — {exc}"
+    # Retries exhausted. Either every attempt raised a network-level
+    # RequestError (last_exc set), every attempt returned a persistent
+    # 429/503 response with no exception ever raised (last_retryable_status
+    # set instead — there's nothing to hand raise_http_tool_error), or the
+    # attempts were a mix of both — in which case the most recent attempt
+    # (last_was_status) decides which classification wins.
+    if last_was_status:
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Upstream returned {last_retryable_status} on every attempt "
+                f"({MAX_RETRIES} retries) — retry later."
+            ),
+        )
+    if last_exc is not None:
+        raise_http_tool_error(last_exc, attempted=attempted)
+    raise_tool_error(
+        "transient",
+        is_retryable=True,
+        attempted=attempted,
+        description=(
+            f"Upstream returned {last_retryable_status} on every attempt "
+            f"({MAX_RETRIES} retries) — retry later."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +199,6 @@ __all__ = [
     "hmrc_vat_client",
     "sanctions_client",
     "_request_with_retry",
-    "format_api_error",
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",

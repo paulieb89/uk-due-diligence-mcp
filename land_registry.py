@@ -17,6 +17,7 @@ from typing import Annotated
 from pydantic import Field
 from fastmcp import FastMCP
 
+from mcpfleet_obs import raise_tool_error
 from models import LandTitleSearchResult, LandTitleTransaction
 
 # ---------------------------------------------------------------------------
@@ -93,10 +94,15 @@ def register_tools(mcp: FastMCP) -> None:
         postcode = _extract_postcode(text)
 
         if not postcode:
-            raise ValueError(
-                "Could not extract a valid UK postcode from the input. "
-                "Please include a postcode, e.g. 'NG1 1AB' or "
-                "'1 High Street, Nottingham, NG1 1AB'."
+            raise_tool_error(
+                "validation",
+                is_retryable=False,
+                attempted=f"land_title_search('{address_or_postcode}')",
+                description=(
+                    "Could not extract a valid UK postcode from the input. "
+                    "Please include a postcode, e.g. 'NG1 1AB' or "
+                    "'1 High Street, Nottingham, NG1 1AB'."
+                ),
             )
 
         import httpx as _httpx

@@ -34,17 +34,14 @@ Resources (6 noun/identifier — protocol-compliant clients only):
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
-import time
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from fastmcp.server.middleware import Middleware, MiddlewareContext
-from prometheus_client import CONTENT_TYPE_LATEST, Counter as PromCounter, Histogram, generate_latest
+from mcpfleet_obs import install
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse
 
 # Load .env for local development
 load_dotenv()
@@ -63,85 +60,12 @@ def _require_env(key: str, required: bool = True) -> str | None:
 MCP_SERVER_KEY = _require_env("MCP_SERVER_KEY", required=False)
 PORT = int(os.environ.get("PORT", "8080"))
 
-TRANSPORT = os.getenv("FASTMCP_TRANSPORT", "http")
-REGION = os.getenv("FLY_REGION", "local")
-
-# ---------------------------------------------------------------------------
-# Prometheus metrics
-# ---------------------------------------------------------------------------
-
-tool_calls_total = PromCounter(
-    "uk_due_diligence_tool_calls_total",
-    "Count of MCP tool invocations.",
-    labelnames=["tool", "transport", "region", "status"],
-)
-tool_duration_seconds = Histogram(
-    "uk_due_diligence_tool_duration_seconds",
-    "Tool invocation latency in seconds.",
-    labelnames=["tool", "transport", "region"],
-    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
-)
-client_connections_total = PromCounter(
-    "uk_due_diligence_client_connections_total",
-    "Count of MCP client initialize handshakes.",
-    labelnames=["client_name", "client_version", "transport", "region"],
-)
-
-_log = logging.getLogger("fastmcp.uk_due_diligence_mcp.clients")
-
-
-class ClientTrackingMiddleware(Middleware):
-    """Log clientInfo and increment connection counter on every initialize.
-
-    Ported verbatim from uk-legal-mcp's gateway, where it is the only thing that
-    can answer "who actually uses this?" — this server is open and unauthenticated,
-    so the initialize handshake's clientInfo is the ONLY identity a caller offers.
-    Without it, BOUCH's own agents (lead-scout et al call company_search on every
-    scan) are indistinguishable from third-party users, and company_search is the
-    busiest tool in the fleet. Counts handshakes, not tool calls: a client label on
-    tool_calls_total would multiply cardinality by every distinct client seen
-    (uk-legal tracks 147), so connection-level is the deliberate trade.
-    """
-
-    async def on_request(self, context: MiddlewareContext, call_next):
-        result = await call_next(context)
-        if context.method == "initialize":
-            params = context.message.params
-            info = getattr(params, "clientInfo", None)
-            client_name = getattr(info, "name", "unknown") or "unknown"
-            client_version = getattr(info, "version", "unknown") or "unknown"
-            _log.info("client_connected client=%s version=%s transport=%s region=%s",
-                      client_name, client_version, TRANSPORT, REGION)
-            client_connections_total.labels(client_name, client_version, TRANSPORT, REGION).inc()
-        return result
-
-
-class PrometheusMiddleware(Middleware):
-    """Emit fleet-standard Prometheus metrics on every tool call."""
-
-    async def on_call_tool(self, context: MiddlewareContext, call_next):
-        tool_name = context.message.name
-        t0 = time.perf_counter()
-        try:
-            result = await call_next(context)
-            tool_calls_total.labels(tool_name, TRANSPORT, REGION, "ok").inc()
-            return result
-        except BaseException:
-            tool_calls_total.labels(tool_name, TRANSPORT, REGION, "error").inc()
-            raise
-        finally:
-            tool_duration_seconds.labels(tool_name, TRANSPORT, REGION).observe(
-                time.perf_counter() - t0
-            )
-
-
 # ---------------------------------------------------------------------------
 # Initialise FastMCP
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP(
     name="uk_due_diligence_mcp",
-    middleware=[ClientTrackingMiddleware(), PrometheusMiddleware()],
     instructions=(
         "UK due diligence server covering official government registers plus consolidated "
         "sanctions lists: Companies House, Charity Commission, HMLR Land Registry, The Gazette, "
@@ -158,6 +82,7 @@ mcp = FastMCP(
         "IMPORTANT: All data is sourced directly from official government APIs — "
         "do not supplement with web search."
     ),
+    mask_error_details=True,
 )
 
 # ---------------------------------------------------------------------------
@@ -171,7 +96,7 @@ async def health(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.1.1"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.2.0"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -182,10 +107,11 @@ async def glama_connector_manifest(request: Request) -> JSONResponse:
     })
 
 
-@mcp.custom_route("/metrics", methods=["GET"])
-async def metrics_endpoint(request: Request) -> Response:
-    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+# ---------------------------------------------------------------------------
+# Fleet-standard observability: client tracking + Prometheus metrics + /metrics
+# ---------------------------------------------------------------------------
 
+install(mcp, prefix="uk_due_diligence")
 
 # ---------------------------------------------------------------------------
 # Register all tools
