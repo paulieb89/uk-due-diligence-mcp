@@ -136,7 +136,7 @@ def register_tools(mcp: FastMCP) -> None:
         ids: list[str] = []
         seen: set[str] = set()
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 continue
             for id_ in result:
                 if id_ not in seen:

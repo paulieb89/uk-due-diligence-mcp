@@ -32,8 +32,9 @@ from pydantic import Field
 from fastmcp import FastMCP
 
 import httpx
+from fastmcp.exceptions import ToolError
 from http_client import _request_with_retry, gazette_client
-from mcpfleet_obs import raise_tool_error
+from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 from models import GazetteInsolvencyResult, GazetteNotice
 
 # ---------------------------------------------------------------------------
@@ -236,8 +237,13 @@ def register_tools(mcp: FastMCP) -> None:
                 if isinstance(entries, dict):
                     entries = [entries]
                 all_notices = _extract_notices(entries)
-            except Exception:
-                pass
+            except ToolError:
+                # Already a structured fleet error (e.g. persistent 429/503) —
+                # propagate as-is rather than masking it as an empty,
+                # isError=False notices list.
+                raise
+            except Exception as exc:
+                raise_http_tool_error(exc, attempted="GET /insolvency/notice/data.json")
 
         # Filter by specific notice type if requested
         if notice_type:

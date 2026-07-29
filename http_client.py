@@ -68,11 +68,16 @@ async def _request_with_retry(
     attempted = f"{method} {url.split('?', 1)[0]}"
     last_exc: Optional[Exception] = None
     last_retryable_status: Optional[int] = None
+    # Which tracker fired most recently — decides which one classifies the
+    # final failure when retries exhaust with both set (e.g. a RequestError
+    # on an early attempt followed by a persistent 429/503 on the last one).
+    last_was_status = False
     for attempt in range(MAX_RETRIES):
         try:
             resp = await client.request(method, url, **kwargs)
             if resp.status_code in (429, 503):
                 last_retryable_status = resp.status_code
+                last_was_status = True
                 wait = BACKOFF_BASE ** attempt
                 await asyncio.sleep(wait)
                 continue
@@ -88,12 +93,25 @@ async def _request_with_retry(
             raise_http_tool_error(exc, attempted=attempted)
         except httpx.RequestError as exc:
             last_exc = exc
+            last_was_status = False
             await asyncio.sleep(BACKOFF_BASE ** attempt)
 
     # Retries exhausted. Either every attempt raised a network-level
-    # RequestError (last_exc set) or every attempt returned a persistent
+    # RequestError (last_exc set), every attempt returned a persistent
     # 429/503 response with no exception ever raised (last_retryable_status
-    # set instead — there's nothing to hand raise_http_tool_error).
+    # set instead — there's nothing to hand raise_http_tool_error), or the
+    # attempts were a mix of both — in which case the most recent attempt
+    # (last_was_status) decides which classification wins.
+    if last_was_status:
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Upstream returned {last_retryable_status} on every attempt "
+                f"({MAX_RETRIES} retries) — retry later."
+            ),
+        )
     if last_exc is not None:
         raise_http_tool_error(last_exc, attempted=attempted)
     raise_tool_error(
