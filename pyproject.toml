@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "uk-due-diligence-mcp"
-version = "1.1.1"
+version = "1.2.0"
 description = "UK due diligence MCP server — Companies House, Charity Commission, HMLR, Gazette, HMRC VAT"
 readme = "README.md"
 requires-python = ">=3.11"
