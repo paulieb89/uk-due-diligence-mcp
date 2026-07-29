@@ -1218,7 +1218,6 @@ dependencies = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "mcpfleet-obs" },
-    { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "python-dotenv" },
 ]
@@ -1229,7 +1228,6 @@ requires-dist = [
     { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = "==1.27.0" },
     { name = "mcpfleet-obs", editable = "../mcpfleet-obs" },
-    { name = "prometheus-client", specifier = "==0.24.1" },
     { name = "pydantic", specifier = "==2.13.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
 ]
