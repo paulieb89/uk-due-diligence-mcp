@@ -32,7 +32,7 @@ import httpx
 from pydantic import Field
 from fastmcp import FastMCP
 
-from mcpfleet_obs import raise_tool_error
+from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 from models import VATValidationResult
 
 # ---------------------------------------------------------------------------
@@ -81,28 +81,31 @@ async def _get_bearer_token() -> str:
 
     token_url = f"{_hmrc_base()}/oauth/token"
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.post(
-            token_url,
-            data={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        if resp.status_code in (400, 401):
-            raise_tool_error(
-                "configuration",
-                is_retryable=False,
-                attempted="HMRC OAuth2 token request (client_credentials)",
-                description=(
-                    f"HMRC API credentials invalid or expired (HMRC_ENV={_hmrc_env()}). "
-                    "Check the HMRC_CLIENT_ID / HMRC_CLIENT_SECRET secrets match an "
-                    "application registered for this environment at "
-                    "https://developer.service.hmrc.gov.uk"
-                ),
+        try:
+            resp = await client.post(
+                token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
-        resp.raise_for_status()
+            if resp.status_code in (400, 401):
+                raise_tool_error(
+                    "configuration",
+                    is_retryable=False,
+                    attempted="HMRC OAuth2 token request (client_credentials)",
+                    description=(
+                        f"HMRC API credentials invalid or expired (HMRC_ENV={_hmrc_env()}). "
+                        "Check the HMRC_CLIENT_ID / HMRC_CLIENT_SECRET secrets match an "
+                        "application registered for this environment at "
+                        "https://developer.service.hmrc.gov.uk"
+                    ),
+                )
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise_http_tool_error(exc, attempted=f"POST {token_url}")
         data = resp.json()
 
     token = data["access_token"]
@@ -185,24 +188,27 @@ def register_tools(mcp: FastMCP) -> None:
         url = f"{base}{HMRC_VAT_LOOKUP_PATH}/{vat_number}"
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url,
-                headers={
-                    "Accept": "application/json",
-                    "Authorization": f"Bearer {token}",
-                },
-            )
-
-            if resp.status_code == 404:
-                return VATValidationResult(
-                    valid=False,
-                    vat_number=f"GB{vat_number}",
-                    trading_name=None,
-                    registered_address=None,
-                    consultation_number=None,
+            try:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {token}",
+                    },
                 )
 
-            resp.raise_for_status()
+                if resp.status_code == 404:
+                    return VATValidationResult(
+                        valid=False,
+                        vat_number=f"GB{vat_number}",
+                        trading_name=None,
+                        registered_address=None,
+                        consultation_number=None,
+                    )
+
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise_http_tool_error(exc, attempted=f"GET {url.split('?', 1)[0]}")
             data = resp.json()
 
         target = data.get("target", {})

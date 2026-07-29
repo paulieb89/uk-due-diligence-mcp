@@ -65,28 +65,46 @@ async def _request_with_retry(
     **kwargs: Any,
 ) -> httpx.Response:
     """Make an HTTP request with exponential backoff on 429/503."""
+    attempted = f"{method} {url.split('?', 1)[0]}"
     last_exc: Optional[Exception] = None
+    last_retryable_status: Optional[int] = None
     for attempt in range(MAX_RETRIES):
         try:
             resp = await client.request(method, url, **kwargs)
             if resp.status_code in (429, 503):
+                last_retryable_status = resp.status_code
                 wait = BACKOFF_BASE ** attempt
                 await asyncio.sleep(wait)
                 continue
             resp.raise_for_status()
             return resp
         except httpx.HTTPStatusError as exc:
-            last_exc = exc
-            if exc.response.status_code not in (429, 503):
-                raise
+            # raise_for_status() above is only ever reached for a status
+            # code NOT already in (429, 503) — those are handled by the
+            # branch above without raising. So any HTTPStatusError caught
+            # here is terminal for this loop: route it through the fleet
+            # error taxonomy immediately instead of retrying or re-raising
+            # the raw httpx exception.
+            raise_http_tool_error(exc, attempted=attempted)
         except httpx.RequestError as exc:
             last_exc = exc
             await asyncio.sleep(BACKOFF_BASE ** attempt)
 
-    # last_exc is always set by this point — the loop only exits without
-    # returning after at least one failed attempt.
-    attempted = f"{method} {url.split('?', 1)[0]}"
-    raise_http_tool_error(last_exc, attempted=attempted)  # type: ignore[arg-type]
+    # Retries exhausted. Either every attempt raised a network-level
+    # RequestError (last_exc set) or every attempt returned a persistent
+    # 429/503 response with no exception ever raised (last_retryable_status
+    # set instead — there's nothing to hand raise_http_tool_error).
+    if last_exc is not None:
+        raise_http_tool_error(last_exc, attempted=attempted)
+    raise_tool_error(
+        "transient",
+        is_retryable=True,
+        attempted=attempted,
+        description=(
+            f"Upstream returned {last_retryable_status} on every attempt "
+            f"({MAX_RETRIES} retries) — retry later."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

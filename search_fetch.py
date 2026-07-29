@@ -27,6 +27,7 @@ from http_client import (
     charity_client,
     gazette_client,
 )
+from mcpfleet_obs import raise_tool_error
 from companies_house import _fetch_company_profile, _normalise_company_number
 from charity import _fetch_charity_profile
 from disqualified import _fetch_disqualified_profile
@@ -167,7 +168,12 @@ def register_tools(mcp: FastMCP) -> None:
         """
         prefix, _, value = id.partition(":")
         if not value:
-            raise ValueError(f"Invalid ID format {id!r} — expected prefix:value")
+            raise_tool_error(
+                "validation",
+                is_retryable=False,
+                attempted=f"fetch({id!r})",
+                description=f"Invalid ID format {id!r} — expected prefix:value",
+            )
 
         if prefix == "company":
             co = await _fetch_company_profile(_normalise_company_number(value))
@@ -222,6 +228,11 @@ def register_tools(mcp: FastMCP) -> None:
                 "metadata": {"source": "gazette"},
             }
 
-        raise ValueError(
-            f"Unknown ID prefix {prefix!r}. Valid prefixes: company, charity, disqualification, notice"
+        raise_tool_error(
+            "validation",
+            is_retryable=False,
+            attempted=f"fetch({id!r})",
+            description=(
+                f"Unknown ID prefix {prefix!r}. Valid prefixes: company, charity, disqualification, notice"
+            ),
         )

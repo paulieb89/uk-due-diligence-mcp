@@ -17,6 +17,7 @@ from pydantic import Field
 from fastmcp import FastMCP
 
 from http_client import _request_with_retry, companies_house_client
+from mcpfleet_obs import raise_tool_error
 from models import (
     DisqualificationOrder,
     DisqualifiedProfile,
@@ -69,7 +70,12 @@ def register_tools(mcp: FastMCP) -> None:
         """
         query = query or name
         if not query:
-            raise ValueError("Provide 'query' (or 'name') — the person's name to search for.")
+            raise_tool_error(
+                "validation",
+                is_retryable=False,
+                attempted="disqualified_search(query=None)",
+                description="Provide 'query' (or 'name') — the person's name to search for.",
+            )
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(

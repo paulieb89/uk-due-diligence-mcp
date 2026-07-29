@@ -33,6 +33,7 @@ from fastmcp import FastMCP
 
 import httpx
 from http_client import _request_with_retry, gazette_client
+from mcpfleet_obs import raise_tool_error
 from models import GazetteInsolvencyResult, GazetteNotice
 
 # ---------------------------------------------------------------------------
@@ -208,7 +209,12 @@ def register_tools(mcp: FastMCP) -> None:
         """
         entity_name = name or query or entity_name
         if not entity_name:
-            raise ValueError("Provide 'name' (or 'query') — the company or individual name to search for.")
+            raise_tool_error(
+                "validation",
+                is_retryable=False,
+                attempted="gazette_insolvency(name=None)",
+                description="Provide 'name' (or 'query') — the company or individual name to search for.",
+            )
         qs: dict[str, Any] = {
             "text": entity_name,
             "results-page-size": 100,
