@@ -82,6 +82,7 @@ mcp = FastMCP(
         "IMPORTANT: All data is sourced directly from official government APIs — "
         "do not supplement with web search."
     ),
+    mask_error_details=True,
 )
 
 # ---------------------------------------------------------------------------

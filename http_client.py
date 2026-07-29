@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 import httpx
 
+from mcpfleet_obs import raise_http_tool_error, raise_tool_error
+
 # ---------------------------------------------------------------------------
 # Base URLs
 # ---------------------------------------------------------------------------
@@ -41,12 +43,17 @@ BACKOFF_BASE = 1.5  # seconds
 
 
 def _get_env(key: str, required: bool = True) -> Optional[str]:
-    """Read an env var; raise on missing if required=True."""
+    """Read an env var; raise a structured configuration error if missing and required."""
     val = os.environ.get(key)
     if required and not val:
-        raise RuntimeError(
-            f"Missing required environment variable: {key}. "
-            f"Set it via --env or fly.toml [env] section."
+        raise_tool_error(
+            "configuration",
+            is_retryable=False,
+            attempted=key,
+            description=(
+                f"Missing required environment variable: {key}. "
+                f"Set it via --env or fly.toml [env] section."
+            ),
         )
     return val
 
@@ -76,30 +83,10 @@ async def _request_with_retry(
             last_exc = exc
             await asyncio.sleep(BACKOFF_BASE ** attempt)
 
-    raise last_exc  # type: ignore[misc]
-
-
-def format_api_error(exc: Exception, context: str = "") -> str:
-    """Return a structured, agent-friendly error string."""
-    prefix = f"[{context}] " if context else ""
-    if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        if status == 400:
-            return f"{prefix}Error 400: Bad request — check your input parameters."
-        if status == 401:
-            return f"{prefix}Error 401: Unauthorised — verify your API key is set correctly."
-        if status == 404:
-            return f"{prefix}Error 404: Not found — the entity may not exist in this register."
-        if status == 429:
-            return f"{prefix}Error 429: Rate limit exceeded — reduce request frequency."
-        if status == 503:
-            return f"{prefix}Error 503: Service unavailable — the register API may be down."
-        return f"{prefix}Error {status}: API request failed."
-    if isinstance(exc, httpx.TimeoutException):
-        return f"{prefix}Timeout: The register API did not respond in time."
-    if isinstance(exc, httpx.RequestError):
-        return f"{prefix}Network error: {type(exc).__name__} — {exc}"
-    return f"{prefix}Unexpected error: {type(exc).__name__} — {exc}"
+    # last_exc is always set by this point — the loop only exits without
+    # returning after at least one failed attempt.
+    attempted = f"{method} {url.split('?', 1)[0]}"
+    raise_http_tool_error(last_exc, attempted=attempted)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +163,6 @@ __all__ = [
     "hmrc_vat_client",
     "sanctions_client",
     "_request_with_retry",
-    "format_api_error",
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",

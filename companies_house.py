@@ -10,8 +10,11 @@ Covers:
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any
 
+import httpx
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 from fastmcp import FastMCP
 
@@ -27,6 +30,8 @@ from models import (
     CompanySearchItem,
     CompanySearchResult,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Risk thresholds
@@ -90,8 +95,10 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
                 charges_data.get("total_count", 0) > 0
                 and not charges_items
             )
-        except Exception:
-            pass
+        except (ToolError, httpx.HTTPError):
+            logger.warning(
+                "charges check failed for %s — has_charges omitted", company_number
+            )
 
     accs_raw = data.get("accounts") or {}
     conf_raw = data.get("confirmation_statement") or {}
