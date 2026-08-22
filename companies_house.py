@@ -350,6 +350,7 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
     oid = officer_id.strip()
     raw_items: list[dict[str, Any]] = []
     top: dict[str, Any] = {}
+    attempted = f"GET /officers/{oid}/appointments"
     async with companies_house_client() as client:
         start_index = 0
         # CH clamps items_per_page to 50 on this endpoint regardless of the
@@ -371,11 +372,40 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
             if not top:
                 top = data
             page_items = data.get("items", []) or []
+            total_results = int(data.get("total_results", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_results:
+                # Upstream said there should be more, but this page came
+                # back empty. Not "must be the end" — an incomplete
+                # collection returned silently is worse than no result.
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"Officer appointments pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_results={total_results} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
             raw_items.extend(page_items)
-            total_results = int(data.get("total_results", len(raw_items)) or 0)
             start_index += len(page_items)
-            if not page_items or start_index >= total_results:
+            if start_index >= total_results:
                 break
+
+    result_total = int(top.get("total_results", len(raw_items)) or 0)
+    if len(raw_items) != result_total:
+        # Post-loop invariant, not just trust in the loop's own logic.
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Officer appointments collection incomplete or inconsistent: "
+                f"received {len(raw_items)} appointments but upstream reported "
+                f"total_results={result_total}."
+            ),
+        )
 
     appointments = [
         OfficerAppointment(

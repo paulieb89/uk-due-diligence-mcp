@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastmcp.exceptions import ToolError
 
 import disqualified
+from mcpfleet_obs import parse_error_payload
 
 
 def _mock_client_factory(handler):
@@ -82,14 +84,20 @@ async def test_natural_disqualification_resolves_without_trying_corporate(monkey
 
 
 @pytest.mark.asyncio
-async def test_disqualification_not_found_on_either_endpoint_raises_lookup_error(monkeypatch):
-    """When neither endpoint has the record, the original LookupError
-    behavior must be preserved — not a raw ToolError leaking through."""
+async def test_disqualification_not_found_on_either_endpoint_raises_structured_error(monkeypatch):
+    """When neither the natural nor corporate endpoint has the record,
+    that must surface as a structured Fleet not_found error — not a raw
+    LookupError bypassing the error taxonomy."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"errors": [{"error": "not-found"}]})
 
     monkeypatch.setattr(disqualified, "companies_house_client", _mock_client_factory(handler))
 
-    with pytest.raises(LookupError):
+    with pytest.raises(ToolError) as exc_info:
         await disqualified._fetch_disqualified_profile("NOBODY789")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "not_found"
+    assert payload.is_retryable is False
