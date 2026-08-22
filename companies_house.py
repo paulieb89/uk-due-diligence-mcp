@@ -68,6 +68,25 @@ def _truncate_natures(natures: list[str], max_chars: int) -> list[str]:
     return out
 
 
+def _officer_id_from_links(links: dict[str, Any]) -> str | None:
+    """Extract the officer ID from an officer's links.officer.appointments URL.
+
+    Distinct from disqualified.py's `_extract_officer_id`, which reads a
+    different link shape (the `self` link's tail). Here the officer ID is
+    the path segment between `/officers/` and `/appointments`, e.g.
+    "/officers/EAoJ81mtThuKM5KmSuO5U1RNLHs/appointments" ->
+    "EAoJ81mtThuKM5KmSuO5U1RNLHs".
+    """
+    officer_links = (links or {}).get("officer")
+    appointments_link = officer_links.get("appointments") if isinstance(officer_links, dict) else None
+    if not appointments_link:
+        return None
+    parts = [p for p in str(appointments_link).split("/") if p]
+    if len(parts) >= 2 and parts[0] == "officers":
+        return parts[1]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -166,6 +185,7 @@ async def _fetch_company_officers(
             country_of_residence=raw.get("country_of_residence"),
             occupation=raw.get("occupation"),
             date_of_birth=raw.get("date_of_birth") or {},
+            officer_id=_officer_id_from_links(raw.get("links") or {}),
             appointment_count=None,
             address=raw.get("address") or {},
             links=raw.get("links") or {},
