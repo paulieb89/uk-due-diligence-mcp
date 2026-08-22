@@ -54,6 +54,7 @@ exclude = [
 only-include = [
     "server.py",
     "companies_house.py",
+    "companies_house_documents.py",
     "charity.py",
     "disqualified.py",
     "land_registry.py",

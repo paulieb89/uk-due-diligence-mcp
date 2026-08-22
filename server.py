@@ -2,7 +2,7 @@
 server.py — uk_due_diligence_mcp
 
 UK Due Diligence MCP server.
-18 tools + 9 resource templates across six official-source registers
+19 tools + 10 resource templates across six official-source registers
 (five public registers plus consolidated sanctions lists).
 
 Data sources:
@@ -15,9 +15,10 @@ Data sources:
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (18 — all clients including ChatGPT):
+Tools (19 — all clients including ChatGPT):
     company_search, company_profile, company_officers, company_psc,
-        officer_appointments, company_charges, company_filing_history
+        officer_appointments, company_charges, company_filing_history,
+        company_filing_document
     disqualified_search, disqualified_profile
     charity_search, charity_profile
     gazette_insolvency, gazette_notice
@@ -25,12 +26,13 @@ Tools (18 — all clients including ChatGPT):
     sanctions_screen
     search, fetch
 
-Resources (9 noun/identifier — protocol-compliant clients only):
+Resources (10 noun/identifier — protocol-compliant clients only):
     company://{company_number}/profile
     company://{company_number}/officers
     company://{company_number}/psc
     company://{company_number}/charges
     company://{company_number}/filing-history
+    company-document://{document_id}{?mime_type}
     officer://{officer_id}/appointments
     disqualification://{officer_id}
     charity://{charity_number}/profile
@@ -88,6 +90,10 @@ mcp = FastMCP(
         "not DD conclusions — it is paginated per page (not auto-fetched to completeness like "
         "company_officers/company_psc/company_charges), since a long-lived company's filing "
         "history is unbounded; narrow large results with its category= parameter. "
+        "company_filing_document resolves a filing's links.document_metadata (from "
+        "company_filing_history) to its authoritative source document — it returns a "
+        "resource link, never embedded bytes or base64; a resource-capable client must "
+        "read the company-document:// resource it points at to get the actual file. "
         "Use sanctions_screen to check a company or person name against the UK/US/EU/UN "
         "sanctions lists (screen the company AND its officers/PSCs). "
         "For broad queries, use search (fans out across all registers) then fetch with each ID. "
@@ -136,9 +142,10 @@ install(mcp, prefix="uk_due_diligence")
 # Register all tools
 # ---------------------------------------------------------------------------
 
-import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat, sanctions, search_fetch
+import companies_house, companies_house_documents, charity, disqualified, land_registry, gazette, hmrc_vat, sanctions, search_fetch
 
 companies_house.register_tools(mcp)
+companies_house_documents.register_tools(mcp)
 charity.register_tools(mcp)
 disqualified.register_tools(mcp)
 land_registry.register_tools(mcp)
@@ -148,6 +155,7 @@ sanctions.register_tools(mcp)
 search_fetch.register_tools(mcp)
 
 companies_house.register_resources(mcp)
+companies_house_documents.register_resources(mcp)
 charity.register_resources(mcp)
 disqualified.register_resources(mcp)
 gazette.register_resources(mcp)

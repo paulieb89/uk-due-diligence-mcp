@@ -37,13 +37,17 @@ async def test_server_docstring_tool_and_resource_counts_are_current(mcp_client)
 
     tools = await mcp_client.list_tools()
     resources = await mcp_client.list_resource_templates()
-    assert len(tools) == 18
-    assert len(resources) == 9
+    assert len(tools) == 19
+    assert len(resources) == 10
     tool_names = {t.name for t in tools}
     resource_names = {t.name for t in resources}
-    assert {"officer_appointments", "company_charges", "company_filing_history", "sanctions_screen"} <= tool_names
+    assert {
+        "officer_appointments", "company_charges", "company_filing_history",
+        "company_filing_document", "sanctions_screen",
+    } <= tool_names
     assert "company_charges" in resource_names
     assert "company_filing_history" in resource_names
+    assert "company_filing_document_content" in resource_names
 
 
 @pytest.mark.asyncio
