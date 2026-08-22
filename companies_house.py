@@ -669,8 +669,9 @@ def register_resources(mcp: FastMCP) -> None:
         "company://{company_number}/officers",
         name="company_officers",
         description=(
-            "Active officers for a Companies House company number. "
-            "Flags directors with >=10 other appointments (nominee/phoenix risk signal)."
+            "Active officers for a Companies House company number. Each officer "
+            "carries an officer_id — pass it to officer_appointments to discover "
+            "that person's full company history."
         ),
         mime_type="application/json",
     )

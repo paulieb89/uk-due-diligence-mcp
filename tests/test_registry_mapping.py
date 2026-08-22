@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import httpx
 import pytest
+import pytest_asyncio
+from fastmcp import Client
+from fastmcp.exceptions import ToolError
 
 import companies_house
+from mcpfleet_obs import parse_error_payload
+from server import mcp
 
 
 def _mock_client_factory(handler):
@@ -16,6 +21,25 @@ def _mock_client_factory(handler):
         )
 
     return factory
+
+
+@pytest_asyncio.fixture
+async def mcp_client():
+    async with Client(mcp) as c:
+        yield c
+
+
+@pytest.mark.asyncio
+async def test_company_officers_resource_description_has_no_stale_flag_claim(mcp_client):
+    """The officers resource must not claim the unimplemented
+    high-appointment-count flag — appointment_count and
+    high_appointment_count_flag are hardcoded None."""
+
+    templates = await mcp_client.list_resource_templates()
+    officers_template = next(t for t in templates if t.name == "company_officers")
+    description = (officers_template.description or "").lower()
+    assert "high-appointment" not in description
+    assert "flag" not in description
 
 
 @pytest.mark.asyncio
