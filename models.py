@@ -678,6 +678,42 @@ class CompanyFilingHistoryResult(BaseModel):
     filings: list[CompanyFiling] = Field(default_factory=list, description="Filings on this page.")
 
 
+class CompanyFilingDocumentResult(BaseModel):
+    """Structured summary of a single Companies House filed document.
+
+    This is metadata only — the actual bytes are never embedded here or
+    anywhere in a tool result. resource_uri is a company-document://
+    MCP resource URI; fetch it via resources/read to get the authoritative
+    binary. category uses the Document API's own vocabulary (e.g.
+    'mortgages', 'new-companies', 'liquidations'), which is a DIFFERENT
+    set of strings from CompanyFiling.category on the same filing (e.g.
+    'mortgage', 'incorporation', 'insolvency') — confirmed live, not
+    assumed to align.
+    """
+
+    model_config = BASE_CFG
+
+    document_id: str = Field(..., description="Companies House document ID, extracted from document_metadata_url.")
+    company_number: str | None = Field(None, description="Company number this document belongs to.")
+    category: str | None = Field(
+        None, description="Document API category (its own vocabulary — see class docstring)."
+    )
+    pages: int | None = Field(None, description="Page count of the document.")
+    filename: str | None = Field(
+        None, description="Filename as recorded by CH, if any — often empty; not reliable to assume present."
+    )
+    created_at: str | None = Field(None, description="When this document record was created (ISO 8601 timestamp).")
+    mime_type: str = Field(..., description="The resolved MIME type this result refers to (e.g. 'application/pdf').")
+    content_length: int | None = Field(None, description="Declared byte size for mime_type, if known.")
+    resource_uri: str = Field(
+        ..., description="company-document:// MCP resource URI — read it to fetch the actual binary."
+    )
+    note: str | None = Field(
+        None,
+        description="Advisory note, e.g. flagging an unusually large document. Informational only, never blocking.",
+    )
+
+
 # =============================================================================
 # Disqualified directors
 # =============================================================================
