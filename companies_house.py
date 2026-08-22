@@ -1,11 +1,18 @@
 """
 Companies House API tools.
 
-Covers:
-  - company_search   (tool)     -> search by name/keyword
-  - company_profile  (resource) -> full company record with filing signals
-  - company_officers (resource) -> directors with appointment count risk signal
-  - company_psc      (resource) -> persons with significant control / beneficial ownership
+Tools + companion resources (tools and resources share the same
+company_number-keyed fetch helpers below):
+  - company_search          (tool)            -> search by name/keyword
+  - company_profile         (tool + resource) -> full company record, incl. has_charges
+  - company_officers        (tool + resource) -> current/historic officers (appointment_count is
+                                                  always null here — see officer_appointments)
+  - company_psc             (tool + resource) -> persons with significant control / beneficial ownership
+  - officer_appointments    (tool + resource) -> one officer's full cross-company appointment history
+  - company_charges         (tool + resource) -> full secured-charge (mortgage) history
+  - company_filing_history  (tool + resource) -> filing chronology, one page at a time (see
+                                                  _fetch_company_filing_history for why this one
+                                                  doesn't auto-paginate to completeness)
 """
 
 from __future__ import annotations
@@ -30,6 +37,8 @@ from models import (
     CompanyCharge,
     CompanyChargesResult,
     CompanyConfirmationStatementSummary,
+    CompanyFiling,
+    CompanyFilingHistoryResult,
     CompanyOfficer,
     CompanyOfficersResult,
     CompanyProfile,
@@ -532,6 +541,142 @@ async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
     )
 
 
+# Large-unfiltered-history advisory threshold. Not a cap — total_count and
+# has_more are always reported truthfully regardless of size; this only
+# decides whether to nudge the caller toward category= narrowing. Chosen
+# well above a normal company's lifetime filing count (TAS 54, Carillion
+# in liquidation 323) and well below a long-lived PLC's (Tesco: 8,367).
+LARGE_FILING_HISTORY_THRESHOLD = 500
+
+
+def _map_filing(raw: dict[str, Any]) -> CompanyFiling:
+    return CompanyFiling(
+        transaction_id=raw.get("transaction_id"),
+        type=raw.get("type"),
+        date=raw.get("date"),
+        action_date=raw.get("action_date"),
+        category=raw.get("category"),
+        subcategory=raw.get("subcategory"),
+        description=raw.get("description"),
+        description_values=raw.get("description_values") or {},
+        pages=raw.get("pages"),
+        paper_filed=raw.get("paper_filed"),
+        barcode=raw.get("barcode"),
+        resolutions=list(raw.get("resolutions") or []),
+        associated_filings=list(raw.get("associated_filings") or []),
+        annotations=list(raw.get("annotations") or []),
+        links=raw.get("links") or {},
+    )
+
+
+async def _fetch_company_filing_history(
+    company_number: str,
+    *,
+    category: str | None = None,
+    items_per_page: int = 100,
+    start_index: int = 0,
+) -> CompanyFilingHistoryResult:
+    """Fetch one page of a company's filing-history.
+
+    Unlike officers/PSC/charges, this does NOT auto-paginate to
+    completeness internally — a long-lived company's filing history is
+    unbounded in practice (Tesco PLC: 8,367 filings, ~4MB raw), so
+    pagination is exposed to the caller via start_index/has_more instead
+    of hidden behind a fetch-everything loop. category is passed straight
+    to CH's own server-side filter (confirmed live, comma-separated for
+    multiple categories) — narrowing there reduces total_count upstream,
+    not just what's displayed.
+
+    This endpoint never 404s, even for a company number that doesn't
+    exist — a bogus number returns HTTP 200 with total_count=0, identical
+    to a real company with zero filings. Disambiguated below with a
+    minimal existence probe only when total_count is 0 for this query
+    (not per-page: paging past the end of a non-empty history is not
+    the same ambiguity and must not trigger this).
+
+    A page that comes back with zero items while total_count promises
+    more remain at this start_index (a stalled page) also raises —
+    distinct from both total_count == 0 (genuine zero-history) and
+    start_index >= total_count (caller paged past the end, legitimately
+    empty, not an error).
+    """
+    attempted = f"GET /company/{company_number}/filing-history"
+    params: dict[str, Any] = {"items_per_page": items_per_page, "start_index": start_index}
+    if category:
+        params["category"] = category
+
+    async with companies_house_client() as client:
+        resp = await _request_with_retry(client, "GET", attempted.split(" ", 1)[1], params=params)
+        data = resp.json()
+
+        status = data.get("filing_history_status")
+        if status and str(status).startswith("filing-history-not-available"):
+            raise_tool_error(
+                "validation",
+                is_retryable=False,
+                attempted=attempted,
+                description=(
+                    f"Companies House rejected company_number {company_number!r} as "
+                    f"malformed (filing_history_status={status!r}) — not a valid "
+                    f"company number format."
+                ),
+            )
+
+        total_count = int(data.get("total_count", 0) or 0)
+        raw_items = data.get("items", []) or []
+
+        if total_count == 0:
+            # filing-history alone can't distinguish "exists, zero filings"
+            # from "doesn't exist" — both are this same 200/empty shape.
+            # A plain GET /company/{number} (not _fetch_company_profile,
+            # which also fetches charges) resolves it: 404 there raises
+            # not_found via raise_http_tool_error; 200 confirms a genuine
+            # empty result.
+            await _request_with_retry(client, "GET", f"/company/{company_number}")
+        elif not raw_items and start_index < total_count:
+            # Stalled page: total_count promises more filings exist at
+            # this start_index, but the page came back with zero items.
+            # Distinct from total_count == 0 (genuine zero-history,
+            # handled above) and from start_index >= total_count (caller
+            # legitimately paged past the end — falls through below with
+            # returned=0, has_more=False, no error). Zero progress despite
+            # promised remaining items is not a valid result.
+            raise_tool_error(
+                "transient",
+                is_retryable=True,
+                attempted=attempted,
+                description=(
+                    f"Filing-history page at start_index={start_index} came back "
+                    f"empty but total_count={total_count} indicates more filings "
+                    f"exist — stalled page, not a valid result."
+                ),
+            )
+
+    filings = [_map_filing(raw) for raw in raw_items]
+    returned = len(filings)
+    has_more = (start_index + returned) < total_count
+
+    note = None
+    if category is None and total_count > LARGE_FILING_HISTORY_THRESHOLD:
+        note = (
+            f"{total_count} filings — consider narrowing with category= "
+            f"(e.g. 'mortgage', 'officers', 'insolvency', 'accounts') to reduce response size."
+        )
+
+    return CompanyFilingHistoryResult(
+        company_number=company_number,
+        category=category,
+        filing_history_status=status,
+        total_count=total_count,
+        start_index=start_index,
+        items_per_page=int(data.get("items_per_page", items_per_page) or items_per_page),
+        returned=returned,
+        has_more=has_more,
+        note=note,
+        filings=filings,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -746,6 +891,57 @@ def register_tools(mcp: FastMCP) -> None:
         """
         return await _fetch_company_charges(_normalise_company_number(company_number))
 
+    # ------------------------------------------------------------------ #
+    # 7. company_filing_history
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="company_filing_history",
+        annotations={
+            "title": "Get Company Filing History",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def company_filing_history(
+        company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+        category: Annotated[str | None, Field(description="Filter by CH filing category — comma-separated for multiple, e.g. 'mortgage' or 'mortgage,officers'. Omit for all categories. Common values: accounts, confirmation-statement, officers, address, capital, mortgage, persons-with-significant-control, incorporation, insolvency, resolution, annual-return, change-of-name, change-of-constitution, gazette, miscellaneous.", max_length=200)] = None,
+        items_per_page: Annotated[int, Field(description="Results per page (Companies House caps at 100 regardless of a higher value). Default 100.", ge=1, le=100)] = 100,
+        start_index: Annotated[int, Field(description="Pagination offset. Default 0. Re-call with start_index=start_index+returned while has_more is true.", ge=0)] = 0,
+    ) -> CompanyFilingHistoryResult:
+        """Fetch one page of a company's Companies House filing chronology.
+
+        Returns the raw source facts for each filing — transaction ID,
+        form type/category, dates, and the description_values CH uses to
+        render its own text — as delivered upstream, not interpreted into
+        DD conclusions. links.document_metadata on each filing is the
+        identifier a future document-retrieval tool would need; no
+        document content is fetched here.
+
+        Unlike company_officers/company_psc/company_charges, this does
+        NOT auto-fetch every page — a long-lived company's filing history
+        is unbounded in practice (a decades-old PLC can carry thousands
+        of filings). total_count/returned/has_more are always reported
+        truthfully for whatever page and category filter was requested;
+        nothing is silently truncated. Narrow with category= for a
+        specific slice (e.g. category='mortgage' for charge-related
+        filings, category='insolvency' for administration/liquidation
+        filings) — a note is included when an unfiltered history is large.
+
+        A company_number that doesn't resolve to any company returns a
+        structured not_found error, distinct from a genuine zero-filing
+        result — Companies House's filing-history endpoint alone cannot
+        tell these apart, so existence is confirmed separately when the
+        result would otherwise be empty.
+        """
+        return await _fetch_company_filing_history(
+            _normalise_company_number(company_number),
+            category=category,
+            items_per_page=items_per_page,
+            start_index=start_index,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -819,4 +1015,18 @@ def register_resources(mcp: FastMCP) -> None:
     )
     async def company_charges_resource(company_number: str) -> str:
         result = await _fetch_company_charges(_normalise_company_number(company_number))
+        return result.model_dump_json()
+
+    @mcp.resource(
+        "company://{company_number}/filing-history",
+        name="company_filing_history",
+        description=(
+            "First page (up to 100) of a Companies House company's filing "
+            "chronology, unfiltered. For pagination past the first page or "
+            "a category filter, use the company_filing_history tool."
+        ),
+        mime_type="application/json",
+    )
+    async def company_filing_history_resource(company_number: str) -> str:
+        result = await _fetch_company_filing_history(_normalise_company_number(company_number))
         return result.model_dump_json()
