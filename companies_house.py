@@ -1,11 +1,18 @@
 """
 Companies House API tools.
 
-Covers:
-  - company_search   (tool)     -> search by name/keyword
-  - company_profile  (resource) -> full company record with filing signals
-  - company_officers (resource) -> directors with appointment count risk signal
-  - company_psc      (resource) -> persons with significant control / beneficial ownership
+Tools + companion resources (tools and resources share the same
+company_number-keyed fetch helpers below):
+  - company_search          (tool)            -> search by name/keyword
+  - company_profile         (tool + resource) -> full company record, incl. has_charges
+  - company_officers        (tool + resource) -> current/historic officers (appointment_count is
+                                                  always null here — see officer_appointments)
+  - company_psc             (tool + resource) -> persons with significant control / beneficial ownership
+  - officer_appointments    (tool + resource) -> one officer's full cross-company appointment history
+  - company_charges         (tool + resource) -> full secured-charge (mortgage) history
+  - company_filing_history  (tool + resource) -> filing chronology, one page at a time (see
+                                                  _fetch_company_filing_history for why this one
+                                                  doesn't auto-paginate to completeness)
 """
 
 from __future__ import annotations
