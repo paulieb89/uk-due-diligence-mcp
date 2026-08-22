@@ -266,3 +266,75 @@ async def test_psc_preserves_dob_and_does_not_flag_uk_corporate_psc(monkeypatch)
 
     assert result.psc[0].date_of_birth == {"month": 9, "year": 1970}
     assert result.overseas_corporate_psc_flag == 0
+
+
+def _psc_item(name, kind="individual-person-with-significant-control"):
+    return {
+        "kind": kind,
+        "name": name,
+        "natures_of_control": ["ownership-of-shares-25-to-50-percent"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_psc_paginates_past_a_single_page(monkeypatch):
+    """Regression: _fetch_company_psc previously made exactly one
+    unpaginated request. total_results=45 across two pages must yield
+    all 45 PSC entries, requested via start_index 0 then 25."""
+
+    page_one = [_psc_item(f"PSC {i}") for i in range(25)]
+    page_two = [_psc_item(f"PSC {25 + i}") for i in range(20)]
+    requested_start_indexes = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/company/07463956/persons-with-significant-control"
+        start = int(request.url.params.get("start_index", "0"))
+        requested_start_indexes.append(start)
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 45, "items": page_one})
+        return httpx.Response(200, json={"total_results": 45, "items": page_two})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_psc("07463956")
+
+    assert result.total == 45
+    assert len(result.psc) == 45
+    assert requested_start_indexes == [0, 25]
+
+
+@pytest.mark.asyncio
+async def test_psc_raises_on_empty_page_before_total_reached(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 5, "items": [_psc_item("A"), _psc_item("B")]})
+        return httpx.Response(200, json={"total_results": 5, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_psc("07463956")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_psc_raises_on_final_count_mismatch(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 3, "items": [_psc_item("A"), _psc_item("B")]})
+        return httpx.Response(200, json={"total_results": 3, "items": [_psc_item("C"), _psc_item("D")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_psc("07463956")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True

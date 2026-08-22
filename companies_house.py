@@ -252,15 +252,53 @@ async def _fetch_company_officers(
 
 
 async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
+    raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    attempted = f"GET /company/{company_number}/persons-with-significant-control"
     async with companies_house_client() as client:
-        resp = await _request_with_retry(
-            client, "GET",
-            f"/company/{company_number}/persons-with-significant-control",
-        )
-        data = resp.json()
+        start_index = 0
+        page_size = 100
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/company/{company_number}/persons-with-significant-control",
+                params={"items_per_page": page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            if not top:
+                top = data
+            page_items = data.get("items", []) or []
+            total_results = int(data.get("total_results", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_results:
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"PSC pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_results={total_results} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
+            raw_items.extend(page_items)
+            start_index += len(page_items)
+            if start_index >= total_results:
+                break
 
-    raw_items = data.get("items", []) or []
-    total = int(data.get("total_results", len(raw_items)) or 0)
+    total = int(top.get("total_results", len(raw_items)) or 0)
+    if len(raw_items) != total:
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"PSC collection incomplete or inconsistent: received "
+                f"{len(raw_items)} PSC entries but upstream reported "
+                f"total_results={total}."
+            ),
+        )
 
     psc_entries: list[CompanyPSCEntry] = []
     overseas_flag = 0
