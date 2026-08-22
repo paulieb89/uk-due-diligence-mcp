@@ -476,6 +476,34 @@ def register_tools(mcp: FastMCP) -> None:
         """
         return await _fetch_company_psc(_normalise_company_number(company_number))
 
+    # ------------------------------------------------------------------ #
+    # 5. officer_appointments
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="officer_appointments",
+        annotations={
+            "title": "Get Officer Appointment History",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def officer_appointments(
+        officer_id: Annotated[str, Field(description="Companies House officer ID. Returned as officer_id on entries from company_officers.", min_length=1, max_length=100)],
+    ) -> OfficerAppointmentsResult:
+        """Fetch a person's full company appointment history by officer ID.
+
+        Returns every appointment — current and historic — with each
+        company's number, name, status, role, and appointment/resignation
+        dates. Use company_officers first to find an officer_id, then this
+        tool to discover other companies that person has been a director
+        or secretary of, including dissolved or insolvent ones not
+        mentioned anywhere else. Always returns full history; there is no
+        current-only filter, since historical discovery is the point.
+        """
+        return await _fetch_officer_appointments(officer_id)
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -520,4 +548,18 @@ def register_resources(mcp: FastMCP) -> None:
     )
     async def company_psc_resource(company_number: str) -> str:
         result = await _fetch_company_psc(_normalise_company_number(company_number))
+        return result.model_dump_json()
+
+    @mcp.resource(
+        "officer://{officer_id}/appointments",
+        name="officer_appointments",
+        description=(
+            "Full appointment history for a Companies House officer ID: every "
+            "company they've been a director/secretary of, current and historic, "
+            "with company status, role, and dates."
+        ),
+        mime_type="application/json",
+    )
+    async def officer_appointments_resource(officer_id: str) -> str:
+        result = await _fetch_officer_appointments(officer_id)
         return result.model_dump_json()

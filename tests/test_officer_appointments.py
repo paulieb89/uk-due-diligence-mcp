@@ -193,3 +193,50 @@ async def test_officer_appointments_paginates_past_ch_50_item_cap(monkeypatch):
     assert len(result.appointments) == 75
     assert result.total == 75
     assert requested_start_indexes == [0, 50]
+
+
+@pytest_asyncio.fixture
+async def mcp_client():
+    async with Client(mcp) as c:
+        yield c
+
+
+@pytest.mark.asyncio
+async def test_officer_appointments_tool_returns_expected_shape(mcp_client, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "name": "Gareth Leonard DAVIES",
+                "date_of_birth": {"month": 9, "year": 1964},
+                "active_count": 2,
+                "resigned_count": 0,
+                "inactive_count": 1,
+                "items_per_page": 50,
+                "total_results": 1,
+                "items": [_appointment_item("09118548", "MEL PRECISION LIMITED", "liquidation")],
+            },
+        )
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await mcp_client.call_tool("officer_appointments", {"officer_id": "EAoJ81mtThuKM5KmSuO5U1RNLHs"})
+
+    data = result.structured_content
+    assert data["officer_id"] == "EAoJ81mtThuKM5KmSuO5U1RNLHs"
+    assert data["appointments"][0]["company_status"] == "liquidation"
+
+
+@pytest.mark.asyncio
+async def test_officer_appointments_404_is_not_found_error(mcp_client, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"errors": [{"error": "officer-appointments-not-found"}]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool("officer_appointments", {"officer_id": "does-not-exist"})
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "not_found"
+    assert payload.is_retryable is False
