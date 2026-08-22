@@ -153,9 +153,13 @@ class CompanyProfile(BaseModel):
     has_charges: bool | None = Field(
         None,
         description=(
-            "True if the company has outstanding registered charges (secured debt), "
-            "False if the charges endpoint was checked completely and none are outstanding, "
-            "or null if the charges check could not be completed."
+            "True if the company has at least one outstanding or "
+            "part-satisfied charge (secured debt) — not yet fully "
+            "discharged. False if every charge on record is fully "
+            "satisfied, or there are none. Null if the charges check "
+            "could not be completed, or if a charge was returned with an "
+            "unrecognized status that can't be confidently classified. "
+            "Use company_charges for the full charge-by-charge detail."
         ),
     )
     accounts: CompanyAccountsSummary = Field(

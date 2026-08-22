@@ -60,6 +60,13 @@ UK_JURISDICTIONS = {
     "UNITED KINGDOM",
 }
 
+# Charge statuses that represent a live, not-fully-discharged security
+# interest. Explicit set rather than "!= fully-satisfied", so an
+# unrecognized future status from upstream isn't silently miscategorized
+# as still-live.
+LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
+FULLY_SATISFIED_STATUS = "fully-satisfied"
+
 
 def _normalise_company_number(v: str) -> str:
     return v.zfill(8) if v.isdigit() else v.upper()
@@ -105,37 +112,37 @@ def _officer_id_from_links(links: dict[str, Any]) -> str | None:
 # Shared fetch helpers (used by both tools and resources)
 # ---------------------------------------------------------------------------
 
+def _summarize_has_charges(charges: list[CompanyCharge]) -> bool | None:
+    """Tri-state has_charges summary from a complete charge collection.
+
+    True: at least one charge is confirmed live (outstanding/part-satisfied).
+    False: every charge is confirmed fully-satisfied (or there are none —
+    vacuously true for an empty list, so this branch correctly covers both
+    "no charges at all" and "all resolved").
+    None: at least one charge has an unrecognized or missing status and
+    none are confirmed live — refuse to guess False when the data doesn't
+    support it, same discipline as the endpoint-failure case below.
+    """
+    if any(c.status in LIVE_CHARGE_STATUSES for c in charges):
+        return True
+    if all(c.status == FULLY_SATISFIED_STATUS for c in charges):
+        return False
+    return None
+
+
 async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
         data = resp.json()
 
-        has_charges: bool | None = None
-        try:
-            start_index = 0
-            page_size = 100
-            while True:
-                charges_resp = await _request_with_retry(
-                    client,
-                    "GET",
-                    f"/company/{company_number}/charges",
-                    params={"items_per_page": page_size, "start_index": start_index},
-                )
-                charges_data = charges_resp.json()
-                charges_items = charges_data.get("items") or []
-                if any(item.get("status") == "outstanding" for item in charges_items):
-                    has_charges = True
-                    break
-
-                total_count = int(charges_data.get("total_count", len(charges_items)) or 0)
-                start_index += len(charges_items)
-                if not charges_items or start_index >= total_count or len(charges_items) < page_size:
-                    has_charges = False
-                    break
-        except (ToolError, httpx.HTTPError):
-            logger.warning(
-                "charges check failed for %s — has_charges is unknown", company_number
-            )
+    has_charges: bool | None = None
+    try:
+        charges_result = await _fetch_company_charges(company_number)
+        has_charges = _summarize_has_charges(charges_result.charges)
+    except (ToolError, httpx.HTTPError):
+        logger.warning(
+            "charges check failed for %s — has_charges is unknown", company_number
+        )
 
     accs_raw = data.get("accounts") or {}
     conf_raw = data.get("confirmation_statement") or {}

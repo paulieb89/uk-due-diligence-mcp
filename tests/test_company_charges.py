@@ -281,3 +281,99 @@ async def test_company_charges_404_is_not_found_error(mcp_client, monkeypatch):
     assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
     assert payload.error_category == "not_found"
     assert payload.is_retryable is False
+
+
+def _profile_response(company_number="06333469"):
+    return {
+        "company_number": company_number,
+        "company_name": "TAS ENGINEERING LTD",
+        "company_status": "active",
+        "type": "ltd",
+        "accounts": {},
+        "confirmation_statement": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_has_charges_true_when_outstanding(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(200, json={"total_count": 1, "items": [_charge_item(5, "X", "outstanding")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+    assert result.has_charges is True
+
+
+@pytest.mark.asyncio
+async def test_has_charges_true_when_only_part_satisfied(monkeypatch):
+    """Regression: a part-satisfied-only charge history must be True, not
+    False — the semantics bug caught in spec review."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(200, json={"total_count": 1, "items": [_charge_item(5, "X", "part-satisfied")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+    assert result.has_charges is True
+
+
+@pytest.mark.asyncio
+async def test_has_charges_false_when_all_fully_satisfied(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(200, json={"total_count": 1, "items": [_charge_item(5, "X", "fully-satisfied")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+    assert result.has_charges is False
+
+
+@pytest.mark.asyncio
+async def test_has_charges_false_when_no_charges(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(200, json={"total_count": 0, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+    assert result.has_charges is False
+
+
+@pytest.mark.asyncio
+async def test_has_charges_none_when_charges_endpoint_fails(monkeypatch):
+    """PR #4 regression: a charges-endpoint outage must not silently
+    become has_charges=False, and must not break the rest of the profile."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(503, json={"errors": [{"error": "service unavailable"}]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+
+    assert result.has_charges is None
+    assert result.company_type == "ltd"
+
+
+@pytest.mark.asyncio
+async def test_has_charges_none_when_status_unrecognized_and_none_confirmed_live(monkeypatch):
+    """Tri-state regression: a charge with an unrecognized/missing status
+    (not in LIVE_CHARGE_STATUSES, not 'fully-satisfied') must produce
+    None, not a guessed False. A bare any(status in LIVE_CHARGE_STATUSES)
+    boolean would wrongly report False here."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(200, json={"total_count": 1, "items": [_charge_item(5, "X", "some-future-status-not-yet-known")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+    assert result.has_charges is None
