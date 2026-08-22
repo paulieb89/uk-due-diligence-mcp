@@ -42,6 +42,93 @@ async def test_company_officers_resource_description_has_no_stale_flag_claim(mcp
     assert "flag" not in description
 
 
+def _officer_item(name, resigned_on=None):
+    return {
+        "name": name,
+        "officer_role": "director",
+        "appointed_on": "2020-01-01",
+        "resigned_on": resigned_on,
+        "links": {"officer": {"appointments": f"/officers/{name}/appointments"}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_officers_does_not_stop_early_on_a_short_non_final_page(monkeypatch):
+    """Regression for the removed `len(page_items) < page_size` heuristic:
+    a page shorter than page_size that is NOT the last page (more data
+    remains per total_results) must not be treated as end-of-data. Two
+    short (60-item) pages followed by a final 30-item page, total=150,
+    must yield all 150 officers via start_index 0, 60, 120 — the old
+    heuristic would have silently stopped after the first short page,
+    returning only 60."""
+
+    page_one = [_officer_item(f"OFFICER {i}") for i in range(60)]
+    page_two = [_officer_item(f"OFFICER {60 + i}") for i in range(60)]
+    page_three = [_officer_item(f"OFFICER {120 + i}") for i in range(30)]
+    requested_start_indexes = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        requested_start_indexes.append(start)
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 150, "items": page_one})
+        if start == 60:
+            return httpx.Response(200, json={"total_results": 150, "items": page_two})
+        return httpx.Response(200, json={"total_results": 150, "items": page_three})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_officers("06333469")
+
+    assert result.total == 150
+    assert requested_start_indexes == [0, 60, 120]
+
+
+@pytest.mark.asyncio
+async def test_officers_raises_on_empty_page_before_total_reached(monkeypatch):
+    """An unexpected empty page before total_results is reached must
+    raise, not silently return a truncated collection."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 5, "items": [_officer_item("A"), _officer_item("B")]})
+        return httpx.Response(200, json={"total_results": 5, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_officers("06333469")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_officers_raises_on_final_count_mismatch(monkeypatch):
+    """Post-loop invariant: len(officers) must equal total_results before
+    include_resigned filtering. Upstream returning more items across
+    pages than the first page originally reported (e.g. a duplicate on
+    the last page) must raise, not silently overcount."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 3, "items": [_officer_item("A"), _officer_item("B")]})
+        return httpx.Response(200, json={"total_results": 3, "items": [_officer_item("C"), _officer_item("D")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_officers("06333469")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
 @pytest.mark.asyncio
 async def test_company_profile_maps_type_and_scans_all_charge_pages(monkeypatch):
     """Profile must read CH `type` and not infer charge state from page one only."""
