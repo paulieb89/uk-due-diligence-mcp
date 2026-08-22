@@ -266,9 +266,14 @@ async def _fetch_document_content_bytes(
 
     redirect_parts = urlsplit(location)
     if redirect_parts.scheme != "https":
+        # Deliberately not interpolating `location` (or any part of it) —
+        # same signed-URL-secrecy invariant as the anon-fetch leg below.
+        # A non-https redirect could still carry the same X-Amz-* query
+        # values a legitimate signed URL would, so only the scheme itself
+        # (never the query, and here not even the host) is safe to name.
         raise_tool_error(
             "transient", is_retryable=True, attempted=attempted,
-            description=f"Refusing to follow a non-https redirect target: {location!r}.",
+            description="Refusing to follow a non-HTTPS signed document redirect.",
         )
     if not redirect_parts.hostname or not redirect_parts.hostname.endswith(_SAFE_REDIRECT_HOST_SUFFIX):
         raise_tool_error(

@@ -418,16 +418,31 @@ async def test_redirect_to_non_amazonaws_host_is_rejected(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_redirect_to_non_https_is_rejected(monkeypatch):
+    """A non-https redirect could still carry the same X-Amz-* signed-query
+    shape a legitimate redirect would — the rejection message must not
+    interpolate `location` (or any part of it) any more than the anon-fetch
+    leg's own errors do."""
+
+    secret_url = (
+        "http://bucket.amazonaws.com/file?X-Amz-Signature=SUPERSECRETVALUE&X-Amz-Credential=AKIA123"
+    )
+
     def ch_handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(302, headers={"location": "http://s3.eu-west-2.amazonaws.com/x"})
+        return httpx.Response(302, headers={"location": secret_url})
 
     monkeypatch.setattr(docs, "companies_house_client", _mock_ch_client_factory(ch_handler))
 
     with pytest.raises(ToolError) as exc_info:
         await docs._fetch_document_content_bytes("abc123", "application/pdf", 1)
 
-    payload = parse_error_payload(str(exc_info.value))
+    message = str(exc_info.value)
+    payload = parse_error_payload(message)
     assert payload.error_category == "transient"
+    assert "X-Amz" not in message
+    assert "SUPERSECRETVALUE" not in message
+    assert "AKIA123" not in message
+    assert secret_url not in message
+    assert "bucket.amazonaws.com" not in message
 
 
 # ---------------------------------------------------------------------------
