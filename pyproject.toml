@@ -59,8 +59,8 @@ only-include = [
     "land_registry.py",
     "gazette.py",
     "hmrc_vat.py",
+    "sanctions.py",
     "search_fetch.py",
-    "prompts.py",
     "models.py",
     "http_client.py",
 ]

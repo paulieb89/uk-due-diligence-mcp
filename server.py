@@ -70,17 +70,27 @@ mcp = FastMCP(
         "UK due diligence server covering official government registers plus consolidated "
         "sanctions lists: Companies House, Charity Commission, HMLR Land Registry, The Gazette, "
         "HMRC VAT, and the OFSI/OFAC/EU/UN sanctions lists. "
-        "Use company_search, charity_search, disqualified_search, gazette_insolvency, "
-        "vat_validate, and land_title_search to find entities and notices; "
-        "use the companion tools (company_profile, company_officers, company_psc, "
-        "charity_profile, disqualified_profile, gazette_notice) to fetch full records. "
+        "Use company_search to resolve an entity to a company number, and charity_search, "
+        "disqualified_search, gazette_insolvency, vat_validate, and land_title_search to find "
+        "other entities and notices; use the companion tools (company_profile, company_officers, "
+        "company_psc, charity_profile, disqualified_profile, gazette_notice) to fetch full "
+        "records. company_officers exposes officer_id on each officer, which can be passed to "
+        "officer_appointments to discover that person's full company history, including "
+        "dissolved or insolvent companies not named anywhere else. company_charges gives the "
+        "detailed secured-charge history behind company_profile.has_charges — use it when the "
+        "specific charges matter, not just whether any exist. "
         "Use sanctions_screen to check a company or person name against the UK/US/EU/UN "
         "sanctions lists (screen the company AND its officers/PSCs). "
         "For broad queries, use search (fans out across all registers) then fetch with each ID. "
         "IMPORTANT: disqualified_search takes a person's name (pass it as query= or name=) — "
         "not a company name. "
         "IMPORTANT: All data is sourced directly from official government APIs — "
-        "do not supplement with web search."
+        "do not supplement with web search. "
+        "IMPORTANT: a missing, failed, or unresolved check (e.g. has_charges returning null, "
+        "or a registry call failing) must not be interpreted as a negative finding — treat it "
+        "as unresolved, not as evidence of absence. "
+        "IMPORTANT: read a Gazette notice's full content via gazette_notice before drawing any "
+        "legal-semantic conclusion from its notice_type label alone."
     ),
     mask_error_details=True,
 )
@@ -118,8 +128,6 @@ install(mcp, prefix="uk_due_diligence")
 # ---------------------------------------------------------------------------
 
 import companies_house, charity, disqualified, land_registry, gazette, hmrc_vat, sanctions, search_fetch
-import prompts as prompts_module
-from fastmcp.server.transforms import PromptsAsTools
 
 companies_house.register_tools(mcp)
 charity.register_tools(mcp)
@@ -134,9 +142,6 @@ companies_house.register_resources(mcp)
 charity.register_resources(mcp)
 disqualified.register_resources(mcp)
 gazette.register_resources(mcp)
-
-prompts_module.register_prompts(mcp)
-mcp.add_transform(PromptsAsTools(mcp))
 
 # ResourcesAsTools removed — causes ChatGPT to route through read_resource (double-encoded)
 # instead of the named companion tools. Re-add with: mcp.add_transform(ResourcesAsTools(mcp))
