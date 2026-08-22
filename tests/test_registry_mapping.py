@@ -30,6 +30,22 @@ async def mcp_client():
 
 
 @pytest.mark.asyncio
+async def test_server_docstring_tool_and_resource_counts_are_current(mcp_client):
+    """Guards against server.py's module docstring drifting from the
+    actual registered tool/resource count again, as it did after
+    officer_appointments/company_charges shipped without updating it."""
+
+    tools = await mcp_client.list_tools()
+    resources = await mcp_client.list_resource_templates()
+    assert len(tools) == 17
+    assert len(resources) == 8
+    tool_names = {t.name for t in tools}
+    resource_names = {t.name for t in resources}
+    assert {"officer_appointments", "company_charges", "sanctions_screen"} <= tool_names
+    assert "company_charges" in resource_names
+
+
+@pytest.mark.asyncio
 async def test_company_officers_resource_description_has_no_stale_flag_claim(mcp_client):
     """The officers resource must not claim the unimplemented
     high-appointment-count flag — appointment_count and
