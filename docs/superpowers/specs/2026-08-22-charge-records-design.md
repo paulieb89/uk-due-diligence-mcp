@@ -18,8 +18,15 @@ are different findings.
 ## Goal
 
 One new primitive: `company_charges(company_number)` → the complete,
-lossless charge history for a company, paginated correctly, preserving
-upstream structure rather than flattening it away.
+acquisition-useful structured charge history for a company, paginated
+correctly, preserving the material upstream charge structures rather than
+flattening them away. (Not literally lossless — the model is a typed
+projection of named fields, not a raw-JSON passthrough. "Lossless" would
+mean either an untyped dict passthrough or an explicit `raw` field, neither
+of which is worth it here: the typed projection already covers every field
+the acceptance case and BOU-40's scope need, and provenance/raw capture
+belongs in a future source-probe layer, not bolted onto this tool to
+justify a word.)
 
 **Acceptance case**, confirmed live against TAS Engineering (06333469)
 during design (five charges: two outstanding, three fully-satisfied):
@@ -165,10 +172,16 @@ class CompanyCharge(BaseModel):
 class CompanyChargesResult(BaseModel):
     company_number: str
     total_count: int
+    unfiltered_count: int | None = None
     satisfied_count: int | None = None
     part_satisfied_count: int | None = None
     charges: list[CompanyCharge] = Field(default_factory=list)
 ```
+
+`unfiltered_count` is retained even though it's not in BOU-40's original
+field list — it's an actual upstream collection-level fact (present at no
+extra cost, already in the top-level response this tool already fetches),
+not a derived or invented field.
 
 Nested sub-models (`ChargeParticulars`, `ChargeSecuredDetails`, etc.)
 rather than raw `dict[str, Any]` passthrough — unlike `address`/`links` on
@@ -195,11 +208,59 @@ Mirrors the `officer_appointments` shape exactly:
 ### `has_charges` stays consistent, not duplicated logic
 
 `_fetch_company_profile`'s existing charges-pagination loop (shipped in
-PR #4) becomes a thin call into the same `_fetch_company_charges` helper,
-deriving `has_charges` from `any(c.status == "outstanding" for c in
-result.charges)` rather than running its own separate paginated fetch
-against the same endpoint. One source of truth for "does this company have
-charges," not two implementations that could drift.
+PR #4) becomes a thin call into the same `_fetch_company_charges` helper.
+One source of truth for "does this company have charges," not two
+implementations that could drift.
+
+**Semantics fix vs. the first draft of this spec**: `has_charges` must be
+`True` for a **part-satisfied** charge, not just an outstanding one — a
+charge that's only partially discharged has not been resolved, and `False`
+would misrepresent that for DD. Use an explicit set of known live statuses
+rather than a complement check, so an unrecognized future status from
+upstream doesn't silently get miscategorized as "not a charge":
+
+```python
+LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
+
+has_charges = any(c.status in LIVE_CHARGE_STATUSES for c in result.charges)
+```
+
+**Failure propagation is not symmetric between the two call sites**, and
+this must survive the refactor exactly as PR #4 shipped it:
+
+- `_fetch_company_charges` itself propagates `_request_with_retry` failures
+  normally (raises the structured fleet error), matching every other fetch
+  helper in this file (`_fetch_company_officers`, `_fetch_company_psc`,
+  `_fetch_officer_appointments`) — a direct `company_charges` call on a
+  down endpoint should fail loudly, not return an empty/partial result.
+- `_fetch_company_profile` keeps its existing `try/except (ToolError,
+  httpx.HTTPError)` wrapped around the call into `_fetch_company_charges`,
+  exactly as it already does today — a charges-endpoint outage degrades
+  `has_charges` to `None` while the rest of the profile (status, address,
+  accounts, confirmation statement) still returns successfully. This is
+  the PR #4 regression the "Companies House charge endpoint unavailable ≠
+  has_charges:false" fix protects, and it must not regress in this PR.
+
+Full `has_charges` truth table for the acceptance tests:
+
+| Charges retrieved | `has_charges` |
+|---|---|
+| All fully-satisfied | `False` |
+| At least one outstanding | `True` |
+| At least one part-satisfied (none outstanding) | `True` |
+| Empty (company has no charges at all) | `False` |
+| Charges endpoint call fails | `None` |
+
+**Acknowledged cost tradeoff, not acted on in this PR**: routing
+`company_profile` through `_fetch_company_charges` means fetching and
+constructing every full `CompanyCharge` model just to derive one boolean —
+trivial for TAS (5 charges), not necessarily trivial for a company with a
+long charge history. Correctness (one source of truth, no drift) matters
+more than this cost right now. If profiling later shows it's a real
+problem, the fix is extracting a shared charge-page fetch/mapper that both
+`company_charges` and the `has_charges` summary use, not maintaining two
+separate interpretations of charge status. Not building that split
+pre-emptively here.
 
 ### Error handling
 
@@ -223,8 +284,11 @@ same as every other endpoint in this file. No special-casing.
     (mirrors the `officer_appointments` pagination test).
   - `secured_details`/`particulars` fields absent upstream do not raise —
     result field is `None`, not a validation error.
-  - `has_charges` on `company_profile` derived from the same charge data
-    `company_charges` returns (no drift between the two).
+  - `has_charges` on `company_profile`, covering the full truth table
+    above: all-fully-satisfied → `False`, outstanding → `True`,
+    part-satisfied-only → `True`, empty → `False`, charges-endpoint
+    failure → `None` (the last one is a direct regression test for the
+    PR #4 behavior this refactor must not silently break).
 - Live dogfooding against real TAS data before merge: reproduce the exact
   litmus-test answer for charge `063334690005`, and separately confirm a
   satisfied charge (4 or 1) returns complete detail — both from the
@@ -235,13 +299,20 @@ same as every other endpoint in this file. No special-casing.
 - `company_charges("06333469")` returns exactly 5 charges, `total_count == 5`.
 - Charge `063334690005` (charge_number 5): `status == "outstanding"`,
   `particulars.contains_floating_charge is True`,
+  `particulars.contains_fixed_charge is True`,
   `particulars.floating_charge_covers_all is True`,
   `particulars.contains_negative_pledge is True`,
   `persons_entitled == [{"name": "Lloyds Bank Commercail Finance Limited"}]`
   (upstream's spelling, preserved verbatim — not corrected), `secured_details is None`.
+  This is the full litmus-test statement — floating charge over all
+  assets **and** a fixed charge, with a negative pledge — not just a
+  subset of it.
 - At least one satisfied charge (4 or 1) returns `satisfied_on` populated
   and a `transactions` entry with `filing_type == "charge-satisfaction"`.
 - Pagination completeness holds under a multi-page mock.
 - `company_profile.has_charges` for TAS remains `True` (unchanged
-  behavior) but is now derived from `company_charges`'s own data, not a
-  separate paginated fetch.
+  end-to-end behavior for TAS specifically — it has an outstanding charge)
+  but is now derived from `company_charges`'s own data, not a separate
+  paginated fetch. The full truth table above (including part-satisfied
+  → `True` and endpoint-failure → `None`) is covered by dedicated fixture
+  tests, not just TAS's one case.
