@@ -307,7 +307,17 @@ class OfficerAppointmentsResult(BaseModel):
     )
     total: int = Field(..., description="Total appointments returned.")
     active_count: int | None = Field(
-        None, description="Upstream count of active appointments, or null if not provided."
+        None,
+        description=(
+            "Upstream count of appointments Companies House categorizes as "
+            "'active' — this reflects the officer's own appointment/resignation "
+            "state at that company, NOT whether the company itself is "
+            "currently trading. An appointment at a company in liquidation or "
+            "administration still counts as active here if the officer was "
+            "never formally resigned. Check each appointment's own "
+            "company_status field for the company's actual status. Null if "
+            "not provided upstream."
+        ),
     )
     resigned_count: int | None = Field(
         None, description="Upstream count of resigned appointments, or null if not provided."

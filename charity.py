@@ -12,8 +12,10 @@ from typing import Annotated, Any
 
 from pydantic import Field
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from http_client import _request_with_retry, charity_client
+from mcpfleet_obs import parse_error_payload
 from models import (
     CharityClassification,
     CharityProfile,
@@ -74,45 +76,13 @@ def register_tools(mcp: FastMCP) -> None:
         registration date. Use charity_profile for full details once you
         have the charity number. The upstream `searchCharityName` endpoint
         returns the full list in one shot — pagination is applied
-        client-side via offset/limit.
+        client-side via offset/limit. A query that matches nothing is a
+        successful empty result (`charities: []`), not an error — the
+        upstream endpoint signals "no matches" with an HTTP 404, which is
+        translated back into an empty result here rather than surfaced as
+        a not-found failure.
         """
-        async with charity_client() as client:
-            resp = await _request_with_retry(
-                client, "GET",
-                f"/searchCharityName/{query}",
-            )
-            data = resp.json()
-
-        # API returns a list of charity objects directly
-        all_charities = data if isinstance(data, list) else []
-        total = len(all_charities)
-
-        page_slice = all_charities[offset : offset + limit]
-
-        items: list[CharitySearchItem] = []
-        for raw in page_slice:
-            raw_status = raw.get("reg_status")
-            items.append(
-                CharitySearchItem(
-                    charity_number=str(raw.get("reg_charity_number")) if raw.get("reg_charity_number") is not None else None,
-                    charity_name=raw.get("charity_name"),
-                    reg_status=raw_status,
-                    reg_status_label=_STATUS_LABELS.get(raw_status or "", raw_status),
-                    date_of_registration=(raw.get("date_of_registration") or "")[:10] or None,
-                )
-            )
-
-        has_more = (offset + len(items)) < total
-
-        return CharitySearchResult(
-            query=query,
-            total=total,
-            offset=offset,
-            limit=limit,
-            returned=len(items),
-            has_more=has_more,
-            charities=items,
-        )
+        return await _search_charities(query, offset, limit)
 
     @mcp.tool(
         name="charity_profile",
@@ -137,10 +107,60 @@ def register_tools(mcp: FastMCP) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Resource registration
+# Shared search/fetch helpers
 # ---------------------------------------------------------------------------
-# Shared fetch helper
-# ---------------------------------------------------------------------------
+
+async def _search_charities(query: str, offset: int, limit: int) -> CharitySearchResult:
+    async with charity_client() as client:
+        try:
+            resp = await _request_with_retry(
+                client, "GET",
+                f"/searchCharityName/{query}",
+            )
+            data = resp.json()
+        except ToolError as exc:
+            # searchCharityName 404s when a query matches zero charities
+            # rather than returning 200 with an empty list — a search
+            # with no results is a successful empty result, not an
+            # error. Any other error category (auth, transient, etc.)
+            # still propagates.
+            payload = parse_error_payload(str(exc))
+            if payload is not None and payload.error_category == "not_found":
+                data = []
+            else:
+                raise
+
+    # API returns a list of charity objects directly
+    all_charities = data if isinstance(data, list) else []
+    total = len(all_charities)
+
+    page_slice = all_charities[offset : offset + limit]
+
+    items: list[CharitySearchItem] = []
+    for raw in page_slice:
+        raw_status = raw.get("reg_status")
+        items.append(
+            CharitySearchItem(
+                charity_number=str(raw.get("reg_charity_number")) if raw.get("reg_charity_number") is not None else None,
+                charity_name=raw.get("charity_name"),
+                reg_status=raw_status,
+                reg_status_label=_STATUS_LABELS.get(raw_status or "", raw_status),
+                date_of_registration=(raw.get("date_of_registration") or "")[:10] or None,
+            )
+        )
+
+    has_more = (offset + len(items)) < total
+
+    return CharitySearchResult(
+        query=query,
+        total=total,
+        offset=offset,
+        limit=limit,
+        returned=len(items),
+        has_more=has_more,
+        charities=items,
+    )
+
 
 async def _fetch_charity_profile(charity_number: str) -> CharityProfile:
     async with charity_client() as client:
