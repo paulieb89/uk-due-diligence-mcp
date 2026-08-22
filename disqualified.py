@@ -175,8 +175,14 @@ async def _fetch_disqualified_profile(officer_id: str) -> DisqualifiedProfile:
             raise
 
     if data is None:
-        raise LookupError(
-            f"No disqualification record found for officer ID {oid!r}."
+        raise_tool_error(
+            "not_found",
+            is_retryable=False,
+            attempted=f"disqualified_profile('{oid}')",
+            description=(
+                f"No disqualification record found for officer ID {oid!r} as "
+                "either a natural or corporate disqualified officer."
+            ),
         )
 
     raw_orders = data.get("disqualifications", []) or []

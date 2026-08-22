@@ -195,6 +195,61 @@ async def test_officer_appointments_paginates_past_ch_50_item_cap(monkeypatch):
     assert requested_start_indexes == [0, 50]
 
 
+@pytest.mark.asyncio
+async def test_officer_appointments_raises_on_empty_page_before_total_reached(monkeypatch):
+    """An unexpected empty page before total_results is reached must
+    raise, not silently return a truncated collection."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(
+                200,
+                json={"total_results": 5, "items_per_page": 50, "items": [_appointment_item("A", "A LTD", "active")]},
+            )
+        return httpx.Response(200, json={"total_results": 5, "items_per_page": 50, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_officer_appointments("STALLED-OFFICER")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_officer_appointments_raises_on_final_count_mismatch(monkeypatch):
+    """Post-loop invariant: len(appointments) must equal total_results.
+    Upstream returning fewer items across pages than it originally
+    reported must raise, not silently return an incomplete collection."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(
+                200,
+                json={
+                    "total_results": 3,
+                    "items_per_page": 50,
+                    "items": [_appointment_item("A", "A LTD", "active"), _appointment_item("B", "B LTD", "active")],
+                },
+            )
+        return httpx.Response(200, json={"total_results": 3, "items_per_page": 50, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_officer_appointments("MISMATCHED-OFFICER")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
 @pytest_asyncio.fixture
 async def mcp_client():
     async with Client(mcp) as c:
