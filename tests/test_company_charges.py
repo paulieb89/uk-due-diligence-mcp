@@ -242,3 +242,42 @@ async def test_fetch_company_charges_raises_on_final_count_mismatch(monkeypatch)
     assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
     assert payload.error_category == "transient"
     assert payload.is_retryable is True
+
+
+@pytest_asyncio.fixture
+async def mcp_client():
+    async with Client(mcp) as c:
+        yield c
+
+
+@pytest.mark.asyncio
+async def test_company_charges_tool_returns_litmus_charge(mcp_client, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"total_count": 1, "items": [_charge_item(5, "063334690005", "outstanding")]},
+        )
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await mcp_client.call_tool("company_charges", {"company_number": "06333469"})
+
+    data = result.structured_content
+    assert data["total_count"] == 1
+    assert data["charges"][0]["charge_code"] == "063334690005"
+    assert data["charges"][0]["status"] == "outstanding"
+
+
+@pytest.mark.asyncio
+async def test_company_charges_404_is_not_found_error(mcp_client, monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"errors": [{"error": "company-charges-not-found"}]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await mcp_client.call_tool("company_charges", {"company_number": "00000000"})
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "not_found"
+    assert payload.is_retryable is False

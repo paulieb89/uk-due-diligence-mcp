@@ -609,6 +609,35 @@ def register_tools(mcp: FastMCP) -> None:
         """
         return await _fetch_officer_appointments(officer_id)
 
+    # ------------------------------------------------------------------ #
+    # 6. company_charges
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="company_charges",
+        annotations={
+            "title": "Get Company Charges",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def company_charges(
+        company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+    ) -> CompanyChargesResult:
+        """Fetch the complete Companies House charge history for a company.
+
+        Returns every registered charge (secured debt) — current and
+        historic — with status, dates, secured parties, and what each
+        charge covers (fixed/floating/negative-pledge flags and any
+        free-text particulars). Satisfaction is represented as
+        satisfied_on plus a charge-satisfaction filing entry, not a
+        separate 'release' record. company_profile.has_charges is a
+        True/False/unknown summary derived from this same data; use this
+        tool when the specific charges matter, not just whether any exist.
+        """
+        return await _fetch_company_charges(_normalise_company_number(company_number))
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -667,4 +696,18 @@ def register_resources(mcp: FastMCP) -> None:
     )
     async def officer_appointments_resource(officer_id: str) -> str:
         result = await _fetch_officer_appointments(officer_id)
+        return result.model_dump_json()
+
+    @mcp.resource(
+        "company://{company_number}/charges",
+        name="company_charges",
+        description=(
+            "Complete Companies House charge history for a company number: "
+            "every registered charge, current and historic, with status, "
+            "dates, secured parties, and what each charge covers."
+        ),
+        mime_type="application/json",
+    )
+    async def company_charges_resource(company_number: str) -> str:
+        result = await _fetch_company_charges(_normalise_company_number(company_number))
         return result.model_dump_json()
