@@ -18,5 +18,3 @@ it mounts `govuk-mcp`, `uk-legal-mcp`, `uk-due-diligence-mcp` (this repo), and
 If a task mentions "uk-business-mcp" without qualification, it almost always
 means the Ledgerhall proxy, not this due-diligence server.
 
-This folder was previously misleadingly named `/home/bch/dev/uk-business-mcp`
-until 2026-04-14, which was the source of repeated cross-repo confusion.
