@@ -17,7 +17,8 @@
 - No `include_resigned` toggle on `officer_appointments` — it always returns full history (current + historic), no filtering.
 - No interpretation of `company_status`/counts into a derived health/risk field — pass upstream facts through verbatim.
 - `date_of_birth` must default to `{}` when absent upstream, never raise.
-- Pagination must be exact: `len(appointments)` must equal upstream `total_results` when all pages succeed. **CH clamps `items_per_page` to 50 on the `/officers/{id}/appointments` endpoint regardless of the requested value** (confirmed live: requesting 100 still returns `items_per_page: 50` in the response) — the "is this the last page" check must be driven off the response's own `items_per_page`, not the value requested, or pagination silently breaks for any officer with >50 appointments.
+- Pagination must be exact: `len(appointments)` must equal upstream `total_results` when all pages succeed. The loop terminates on `start_index >= total_results` (or an empty page), never on "this page came back shorter than requested" — a short page is not reliable evidence of completion. **CH clamps `items_per_page` to 50 on the `/officers/{id}/appointments` endpoint regardless of the requested value** (confirmed live: requesting 100 still returns `items_per_page: 50` in the response) — this is why a real officer with >50 appointments needs multiple requests, but it is not itself the termination signal; `total_results` is.
+- `inactive_count` (and any other upstream count whose exact categorization logic hasn't been independently verified against per-appointment data) is documented as an unverified upstream value, not asserted to mean anything beyond what Companies House itself reports.
 - Error handling reuses the existing `_request_with_retry` → fleet error taxonomy as-is; no special-casing.
 
 ---
@@ -161,8 +162,11 @@ class OfficerAppointmentsResult(BaseModel):
     inactive_count: int | None = Field(
         None,
         description=(
-            "Upstream count of inactive appointments (company no longer active, "
-            "regardless of the officer's own resignation status), or null if not provided."
+            "Upstream count of appointments Companies House categorizes as "
+            "'inactive', passed through as-is. Exact categorization semantics "
+            "have not been independently verified against per-appointment "
+            "data — treat as an unverified upstream fact, not a derived signal, "
+            "or null if not provided."
         ),
     )
     appointments: list[OfficerAppointment] = Field(
@@ -455,11 +459,11 @@ async def test_officer_appointments_paginates_past_ch_50_item_cap(monkeypatch):
 
     page_one = [_appointment_item(f"{10000000 + i}", f"COMPANY {i}", "active") for i in range(50)]
     page_two = [_appointment_item(f"{10000050 + i}", f"COMPANY {i}", "active") for i in range(25)]
-    requested_sizes = []
+    requested_start_indexes = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        requested_sizes.append(int(request.url.params.get("items_per_page", "0")))
         start = int(request.url.params.get("start_index", "0"))
+        requested_start_indexes.append(start)
         # CH always reports items_per_page=50 in the response, even if a
         # larger value was requested.
         if start == 0:
@@ -471,6 +475,7 @@ async def test_officer_appointments_paginates_past_ch_50_item_cap(monkeypatch):
 
     assert len(result.appointments) == 75
     assert result.total == 75
+    assert requested_start_indexes == [0, 50]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -510,9 +515,10 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
         # CH clamps items_per_page to 50 on this endpoint regardless of the
         # requested value (confirmed live: requesting 100 still returns
         # items_per_page=50 in the response) — unlike /officers, which
-        # allows up to 100. Drive the "last page" check off the response's
-        # own items_per_page, not the value requested, so pagination stays
-        # correct even if CH's cap changes.
+        # allows up to 100. That cap is why a large officer needs multiple
+        # requests, but it is NOT the termination signal: a page coming
+        # back shorter than requested is not reliable evidence of
+        # completion. The loop paginates strictly to total_results.
         requested_page_size = 50
         while True:
             resp = await _request_with_retry(
@@ -526,10 +532,9 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
                 top = data
             page_items = data.get("items", []) or []
             raw_items.extend(page_items)
-            actual_page_size = int(data.get("items_per_page", requested_page_size) or requested_page_size)
             total_results = int(data.get("total_results", len(raw_items)) or 0)
             start_index += len(page_items)
-            if not page_items or start_index >= total_results or len(page_items) < actual_page_size:
+            if not page_items or start_index >= total_results:
                 break
 
     appointments = [
