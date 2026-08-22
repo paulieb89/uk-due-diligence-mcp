@@ -19,8 +19,16 @@ from pydantic import Field
 from fastmcp import FastMCP
 
 from http_client import _request_with_retry, companies_house_client
+from mcpfleet_obs import raise_tool_error
 from models import (
+    ChargeClassification,
+    ChargeParticulars,
+    ChargePersonEntitled,
+    ChargeSecuredDetails,
+    ChargeTransaction,
     CompanyAccountsSummary,
+    CompanyCharge,
+    CompanyChargesResult,
     CompanyConfirmationStatementSummary,
     CompanyOfficer,
     CompanyOfficersResult,
@@ -316,6 +324,103 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
         resigned_count=top.get("resigned_count"),
         inactive_count=top.get("inactive_count"),
         appointments=appointments,
+    )
+
+
+def _map_charge(raw: dict[str, Any]) -> CompanyCharge:
+    classification_raw = raw.get("classification")
+    particulars_raw = raw.get("particulars")
+    secured_details_raw = raw.get("secured_details")
+    return CompanyCharge(
+        charge_number=raw.get("charge_number"),
+        charge_code=raw.get("charge_code"),
+        status=raw.get("status"),
+        classification=ChargeClassification(**classification_raw) if classification_raw else None,
+        created_on=raw.get("created_on"),
+        delivered_on=raw.get("delivered_on"),
+        satisfied_on=raw.get("satisfied_on"),
+        particulars=ChargeParticulars(**particulars_raw) if particulars_raw else None,
+        secured_details=ChargeSecuredDetails(**secured_details_raw) if secured_details_raw else None,
+        persons_entitled=[
+            ChargePersonEntitled(name=p.get("name")) for p in (raw.get("persons_entitled") or [])
+        ],
+        transactions=[
+            ChargeTransaction(
+                filing_type=t.get("filing_type"),
+                delivered_on=t.get("delivered_on"),
+                links=t.get("links") or {},
+            )
+            for t in (raw.get("transactions") or [])
+        ],
+        links=raw.get("links") or {},
+    )
+
+
+async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
+    raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    attempted = f"GET /company/{company_number}/charges"
+    async with companies_house_client() as client:
+        start_index = 0
+        page_size = 100
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/company/{company_number}/charges",
+                params={"items_per_page": page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            if not top:
+                top = data
+            page_items = data.get("items", []) or []
+            total_count = int(data.get("total_count", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_count:
+                # Upstream said there should be more, but this page came
+                # back empty. Not "must be the end" — an incomplete
+                # collection returned silently is worse than no result.
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"Charges pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_count={total_count} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
+            raw_items.extend(page_items)
+            start_index += len(page_items)
+            if start_index >= total_count:
+                break
+
+    charges = [_map_charge(raw) for raw in raw_items]
+    result_total_count = int(top.get("total_count", len(charges)) or 0)
+
+    if len(charges) != result_total_count:
+        # Post-loop invariant, not just trust in the loop's own logic —
+        # catches anything the mid-loop guard above didn't (e.g. a
+        # duplicate/extra item on the last page inflating the count past
+        # what upstream originally reported).
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Charges collection incomplete or inconsistent: received "
+                f"{len(charges)} charges but upstream reported "
+                f"total_count={result_total_count}."
+            ),
+        )
+
+    return CompanyChargesResult(
+        company_number=company_number,
+        total_count=result_total_count,
+        unfiltered_count=top.get("unfiltered_count"),
+        satisfied_count=top.get("satisfied_count"),
+        part_satisfied_count=top.get("part_satisfied_count"),
+        charges=charges,
     )
 
 
