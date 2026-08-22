@@ -17,7 +17,8 @@
 - `charge_code` is optional; `charge_number` (always present) is the reliable identifier.
 - No separate "satisfactions/releases" model — satisfaction is `satisfied_on` (top-level date) plus a `transactions[]` entry with `filing_type == "charge-satisfaction"`, exactly as upstream represents it.
 - Pagination paginates strictly to `start_index >= total_count` — **the field is `total_count` here, not `total_results`** (different from the officer-appointments endpoints) — never on "this page came back shorter than requested."
-- `has_charges` truth table (must hold exactly, including the failure case which is a PR #4 regression protection):
+- **Pagination completeness is enforced, not assumed.** An unexpected empty page while `start_index < total_count` raises immediately (not silently treated as end-of-data). After the loop, `len(charges) != total_count` also raises — a post-loop invariant check, not just trust in the loop's internal logic. Both raise `"transient"`/`is_retryable=True` via `mcpfleet_obs.raise_tool_error` (new import needed in `companies_house.py` — not currently imported there).
+- `has_charges` is a proper **tri-state** derivation (must hold exactly, including the failure case which is a PR #4 regression protection):
 
   | Charges retrieved | `has_charges` |
   |---|---|
@@ -25,9 +26,12 @@
   | At least one outstanding | `True` |
   | At least one part-satisfied (none outstanding) | `True` |
   | Empty (no charges at all) | `False` |
+  | At least one charge has an unrecognized/missing status, and none are confirmed live | `None` |
   | Charges endpoint call fails | `None` |
 
+  A bare `any(status in LIVE_CHARGE_STATUSES)` boolean is **not** sufficient — it would silently report `False` for a charge with an unrecognized or missing status instead of admitting uncertainty. `False` is only correct when every charge is *confirmed* `fully-satisfied` (or there are none).
 - `_fetch_company_charges` propagates upstream failures normally (raises), matching every other fetch helper in the file. `_fetch_company_profile` is the one place that catches that failure and degrades to `has_charges=None` while still returning the rest of the profile — this existing PR #4 behavior must survive the refactor unchanged.
+- `has_charges` is no longer "cheap" — deriving it now means fetching the full charge collection. Don't describe it as cheap anywhere (tool docstrings, model field descriptions).
 - No derived risk/health interpretation of what a charge means — pass upstream facts through.
 - Not literally "lossless" — a typed field projection, not a raw-JSON passthrough. `unfiltered_count` is retained (a real upstream fact, free to keep) but no `raw` blob is added.
 - Error handling reuses the existing `_request_with_retry` → fleet error taxonomy as-is for `company_charges` itself; no special-casing.
@@ -457,6 +461,61 @@ async def test_fetch_company_charges_paginates_to_total_count(monkeypatch):
     assert len(result.charges) == 5
     assert result.total_count == 5
     assert requested_start_indexes == [0, 2]
+
+
+@pytest.mark.asyncio
+async def test_fetch_company_charges_raises_on_empty_page_before_total_reached(monkeypatch):
+    """An unexpected empty page before total_count is reached must raise
+    a structured transient/retryable error, not silently return a
+    truncated collection."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(
+                200,
+                json={"total_count": 5, "items": [_charge_item(5, "X", "outstanding"), _charge_item(4, "Y", "fully-satisfied")]},
+            )
+        return httpx.Response(200, json={"total_count": 5, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_charges("06333469")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_company_charges_raises_on_final_count_mismatch(monkeypatch):
+    """Post-loop invariant: len(charges) must equal total_count. Upstream
+    returning more items across pages than it originally reported (e.g. a
+    duplicate on the last page) must raise, not silently overcount."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        if start == 0:
+            return httpx.Response(
+                200,
+                json={"total_count": 3, "items": [_charge_item(5, "A", "outstanding"), _charge_item(4, "B", "fully-satisfied")]},
+            )
+        return httpx.Response(
+            200,
+            json={"total_count": 3, "items": [_charge_item(3, "C", "fully-satisfied"), _charge_item(2, "D", "fully-satisfied")]},
+        )
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_charges("06333469")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -491,15 +550,14 @@ from models import (
 )
 ```
 
-Add a module-level constant near `HIGH_APPOINTMENT_COUNT`/`UK_JURISDICTIONS`
-(top of the file, with the other risk-threshold constants):
+Also add `raise_tool_error` to the imports — `companies_house.py` doesn't
+currently import from `mcpfleet_obs` directly (it relies on
+`_request_with_retry` to raise on upstream failure), but the pagination
+completeness guards below raise it explicitly for a *local* inconsistency
+`_request_with_retry` has no way to detect:
 
 ```python
-# Charge statuses that represent a live, not-fully-discharged security
-# interest. Explicit set rather than "!= fully-satisfied", so an
-# unrecognized future status from upstream isn't silently miscategorized
-# as still-live.
-LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
+from mcpfleet_obs import raise_tool_error
 ```
 
 Add the fetch helper after `_fetch_officer_appointments` (before the
@@ -538,6 +596,7 @@ def _map_charge(raw: dict[str, Any]) -> CompanyCharge:
 async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
     raw_items: list[dict[str, Any]] = []
     top: dict[str, Any] = {}
+    attempted = f"GET /company/{company_number}/charges"
     async with companies_house_client() as client:
         start_index = 0
         page_size = 100
@@ -552,17 +611,49 @@ async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
             if not top:
                 top = data
             page_items = data.get("items", []) or []
+            total_count = int(data.get("total_count", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_count:
+                # Upstream said there should be more, but this page came
+                # back empty. Not "must be the end" — an incomplete
+                # collection returned silently is worse than no result.
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"Charges pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_count={total_count} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
             raw_items.extend(page_items)
-            total_count = int(data.get("total_count", len(raw_items)) or 0)
             start_index += len(page_items)
-            if not page_items or start_index >= total_count:
+            if start_index >= total_count:
                 break
 
     charges = [_map_charge(raw) for raw in raw_items]
+    result_total_count = int(top.get("total_count", len(charges)) or 0)
+
+    if len(charges) != result_total_count:
+        # Post-loop invariant, not just trust in the loop's own logic —
+        # catches anything the mid-loop guard above didn't (e.g. a
+        # duplicate/extra item on the last page inflating the count past
+        # what upstream originally reported).
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Charges collection incomplete or inconsistent: received "
+                f"{len(charges)} charges but upstream reported "
+                f"total_count={result_total_count}."
+            ),
+        )
 
     return CompanyChargesResult(
         company_number=company_number,
-        total_count=int(top.get("total_count", len(charges)) or 0),
+        total_count=result_total_count,
         unfiltered_count=top.get("unfiltered_count"),
         satisfied_count=top.get("satisfied_count"),
         part_satisfied_count=top.get("part_satisfied_count"),
@@ -580,13 +671,13 @@ factoring it out keeps that internal logic legible.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_company_charges.py -v`
-Expected: 6 passed.
+Expected: 8 passed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add companies_house.py tests/test_company_charges.py
-git commit -m "feat: add _fetch_company_charges with total_count-driven pagination"
+git commit -m "feat: add _fetch_company_charges with enforced pagination completeness"
 ```
 
 ---
@@ -680,9 +771,8 @@ tool (section `5.`), before the closing of `register_tools`:
         free-text particulars). Satisfaction is represented as
         satisfied_on plus a charge-satisfaction filing entry, not a
         separate 'release' record. company_profile.has_charges is a
-        cheap True/False/unknown summary derived from this same data;
-        use this tool when the specific charges matter, not just whether
-        any exist.
+        True/False/unknown summary derived from this same data; use this
+        tool when the specific charges matter, not just whether any exist.
         """
         return await _fetch_company_charges(_normalise_company_number(company_number))
 ```
@@ -708,12 +798,12 @@ In `register_resources`, add after `officer_appointments_resource`:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_company_charges.py -v`
-Expected: 8 passed.
+Expected: 10 passed.
 
 - [ ] **Step 5: Run the full suite**
 
 Run: `uv run pytest -q`
-Expected: all tests pass (27 pre-existing + 8 new = 35).
+Expected: all tests pass (27 pre-existing + 10 new = 37).
 
 - [ ] **Step 6: Commit**
 
@@ -731,8 +821,8 @@ git commit -m "feat: register company_charges tool and resource"
 - Test: `tests/test_company_charges.py`
 
 **Interfaces:**
-- Consumes: `_fetch_company_charges`, `LIVE_CHARGE_STATUSES` from Tasks 2–3.
-- Produces: `_fetch_company_profile`'s `has_charges` now derives from `_fetch_company_charges`, covering the full truth table, with the existing endpoint-failure → `None` behavior preserved exactly.
+- Consumes: `_fetch_company_charges` from Task 2.
+- Produces: `LIVE_CHARGE_STATUSES`, `FULLY_SATISFIED_STATUS` constants and `_summarize_has_charges(charges: list[CompanyCharge]) -> bool | None` in `companies_house.py`. `_fetch_company_profile`'s `has_charges` now derives from `_fetch_company_charges` via this tri-state summarizer, covering the full truth table, with the existing endpoint-failure → `None` behavior preserved exactly.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -818,6 +908,23 @@ async def test_has_charges_none_when_charges_endpoint_fails(monkeypatch):
 
     assert result.has_charges is None
     assert result.company_type == "ltd"
+
+
+@pytest.mark.asyncio
+async def test_has_charges_none_when_status_unrecognized_and_none_confirmed_live(monkeypatch):
+    """Tri-state regression: a charge with an unrecognized/missing status
+    (not in LIVE_CHARGE_STATUSES, not 'fully-satisfied') must produce
+    None, not a guessed False. A bare any(status in LIVE_CHARGE_STATUSES)
+    boolean would wrongly report False here."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469":
+            return httpx.Response(200, json=_profile_response())
+        return httpx.Response(200, json={"total_count": 1, "items": [_charge_item(5, "X", "some-future-status-not-yet-known")]})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_profile("06333469")
+    assert result.has_charges is None
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -825,9 +932,14 @@ async def test_has_charges_none_when_charges_endpoint_fails(monkeypatch):
 Run: `uv run pytest tests/test_company_charges.py -v`
 Expected: FAIL on `test_has_charges_true_when_only_part_satisfied` (current
 code only checks `status == "outstanding"`, so a part-satisfied-only
-history incorrectly produces `False`). The other four should already pass
-against the pre-refactor code, since it happens to get those cases right
-today — that's fine, they lock in behavior this refactor must not break.
+history incorrectly produces `False`) and on
+`test_has_charges_none_when_status_unrecognized_and_none_confirmed_live`
+(current code's `any(status == "outstanding")` is `False` for an
+unrecognized status, so it falls through to the pagination-exhausted
+branch and incorrectly returns `False` instead of `None`). The other four
+should already pass against the pre-refactor code, since it happens to
+get those cases right today — that's fine, they lock in behavior this
+refactor must not break.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -879,11 +991,43 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     has_charges: bool | None = None
     try:
         charges_result = await _fetch_company_charges(company_number)
-        has_charges = any(c.status in LIVE_CHARGE_STATUSES for c in charges_result.charges)
+        has_charges = _summarize_has_charges(charges_result.charges)
     except (ToolError, httpx.HTTPError):
         logger.warning(
             "charges check failed for %s — has_charges is unknown", company_number
         )
+```
+
+Also add, near `HIGH_APPOINTMENT_COUNT`/`UK_JURISDICTIONS` at the top of
+the file (with the other risk-threshold constants), and the summarizer
+function itself right above `_fetch_company_profile`:
+
+```python
+# Charge statuses that represent a live, not-fully-discharged security
+# interest. Explicit set rather than "!= fully-satisfied", so an
+# unrecognized future status from upstream isn't silently miscategorized
+# as still-live.
+LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
+FULLY_SATISFIED_STATUS = "fully-satisfied"
+```
+
+```python
+def _summarize_has_charges(charges: list[CompanyCharge]) -> bool | None:
+    """Tri-state has_charges summary from a complete charge collection.
+
+    True: at least one charge is confirmed live (outstanding/part-satisfied).
+    False: every charge is confirmed fully-satisfied (or there are none —
+    vacuously true for an empty list, so this branch correctly covers both
+    "no charges at all" and "all resolved").
+    None: at least one charge has an unrecognized or missing status and
+    none are confirmed live — refuse to guess False when the data doesn't
+    support it, same discipline as the endpoint-failure case below.
+    """
+    if any(c.status in LIVE_CHARGE_STATUSES for c in charges):
+        return True
+    if all(c.status == FULLY_SATISFIED_STATUS for c in charges):
+        return False
+    return None
 ```
 
 Note the `async with companies_house_client() as client:` block now only
@@ -897,18 +1041,54 @@ further in this PR.
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `uv run pytest tests/test_company_charges.py -v`
-Expected: 13 passed.
+Expected: 16 passed.
 
-- [ ] **Step 5: Run the full suite**
+- [ ] **Step 5: Update the stale has_charges field description**
+
+In `models.py`, find (on `CompanyProfile`):
+
+```python
+    has_charges: bool | None = Field(
+        None,
+        description=(
+            "True if the company has outstanding registered charges (secured debt), "
+            "False if the charges endpoint was checked completely and none are outstanding, "
+            "or null if the charges check could not be completed."
+        ),
+    )
+```
+
+Replace with:
+
+```python
+    has_charges: bool | None = Field(
+        None,
+        description=(
+            "True if the company has at least one outstanding or "
+            "part-satisfied charge (secured debt) — not yet fully "
+            "discharged. False if every charge on record is fully "
+            "satisfied, or there are none. Null if the charges check "
+            "could not be completed, or if a charge was returned with an "
+            "unrecognized status that can't be confidently classified. "
+            "Use company_charges for the full charge-by-charge detail."
+        ),
+    )
+```
+
+This is a documentation-only change matching the tri-state semantics
+fixed in Task 4 — the old description only mentioned "outstanding" and
+promised a boolean, which no longer matches actual behavior.
+
+- [ ] **Step 6: Run the full suite**
 
 Run: `uv run pytest -q`
-Expected: all tests pass (27 pre-existing + 13 new = 40).
+Expected: all tests pass (27 pre-existing + 16 new = 43).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add companies_house.py tests/test_company_charges.py
-git commit -m "fix: has_charges counts part-satisfied as live, derives from _fetch_company_charges"
+git add companies_house.py models.py tests/test_company_charges.py
+git commit -m "fix: has_charges is a proper tri-state, derives from _fetch_company_charges"
 ```
 
 ---
@@ -1012,20 +1192,20 @@ Adds the company_charges primitive from docs/superpowers/specs/2026-08-22-charge
 - new company_charges(company_number) tool + company://{company_number}/charges resource: complete charge history, current and historic, preserving upstream structure (particulars, secured_details, persons_entitled, transactions, classification) rather than flattening it
 - every field on particulars/secured_details is optional — confirmed live that field presence varies by charge age/type (pre-2006 debentures have no boolean flags; MR01-style charges often have no free text)
 - charge_code is optional (absent on some older charges); charge_number is the reliable identifier
-- pagination paginates strictly to total_count (not total_results — different field name than the officer-appointments endpoints), never on page-length-shorter-than-requested
-- has_charges semantics fix: part-satisfied charges now count as True, not just outstanding, via an explicit LIVE_CHARGE_STATUSES set rather than a complement check. Endpoint-failure -> None (the PR #4 regression) is preserved exactly.
-- has_charges is now derived from the same _fetch_company_charges data company_charges returns, not a separate paginated check — one source of truth
+- pagination paginates strictly to total_count (not total_results — different field name than the officer-appointments endpoints), never on page-length-shorter-than-requested. Completeness is enforced, not assumed: an unexpected empty page before total_count raises, and len(charges) == total_count is a checked post-loop invariant, not just trust in the loop's logic
+- has_charges is now a proper tri-state, not a bare bool: True for a confirmed-live charge (outstanding OR part-satisfied -- the original draft only checked outstanding), False only when every charge is confirmed fully-satisfied (or none exist), None when a charge has an unrecognized/missing status and none are confirmed live. Endpoint-failure -> None (the PR #4 regression) is preserved exactly
+- has_charges is now derived from the same _fetch_company_charges data company_charges returns, not a separate paginated check — one source of truth. Its field description and the tool docstring no longer call it "cheap" -- deriving it now means fetching the full charge collection
 
 Explicitly out of scope (per spec/BOU-40): no filing history tool, no accounts/document ingestion, no derived risk interpretation of charge data.
 
 ## Verification
 
-- Unit tests: `uv run pytest -q` — 40 passed (27 pre-existing + 13 new), including the full has_charges truth table (outstanding/part-satisfied/all-satisfied/empty/endpoint-failure) and a pagination-completeness test asserting exact start_index sequence.
+- Unit tests: `uv run pytest -q` — 43 passed (27 pre-existing + 16 new), including the full has_charges tri-state truth table (outstanding/part-satisfied/all-satisfied/empty/unrecognized-status/endpoint-failure), a pagination-completeness test asserting exact start_index sequence, and two tests for the completeness guards (empty page before total reached, final count mismatch).
 - Live dogfooding against TAS Engineering (06333469): reproduces the litmus test exactly — charge 063334690005 is outstanding, floating charge over all assets, fixed charge, negative pledge, Lloyds Bank Commercial Finance Limited, no secured_details. A second, satisfied charge is also confirmed complete (satisfied_on + secured_details/particulars populated), proving the model isn't only correct for live security. has_charges confirmed True against real data.
 
 ## Test plan
 
-- [x] uv run pytest -q — 40 passed
+- [x] uv run pytest -q — 43 passed
 - [x] Live litmus test: charge 063334690005 fully reproduced from the finished MCP tool
 - [x] Live satisfied-charge check
 - [x] Live has_charges confirmation
