@@ -41,7 +41,10 @@ jobs:
     needs: verify
     environment:
       name: staging
-      url: https://uk-due-diligence-mcp-staging.fly.dev
+      # /mcp opens a held-open GET SSE stream (never returns cleanly to a
+      # browser click) and bare root is a 404 — /health is the only endpoint
+      # that resolves fast with a clean human-readable response.
+      url: https://uk-due-diligence-mcp-staging.fly.dev/health
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
