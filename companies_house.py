@@ -19,8 +19,16 @@ from pydantic import Field
 from fastmcp import FastMCP
 
 from http_client import _request_with_retry, companies_house_client
+from mcpfleet_obs import raise_tool_error
 from models import (
+    ChargeClassification,
+    ChargeParticulars,
+    ChargePersonEntitled,
+    ChargeSecuredDetails,
+    ChargeTransaction,
     CompanyAccountsSummary,
+    CompanyCharge,
+    CompanyChargesResult,
     CompanyConfirmationStatementSummary,
     CompanyOfficer,
     CompanyOfficersResult,
@@ -51,6 +59,13 @@ UK_JURISDICTIONS = {
     "ENGLAND",
     "UNITED KINGDOM",
 }
+
+# Charge statuses that represent a live, not-fully-discharged security
+# interest. Explicit set rather than "!= fully-satisfied", so an
+# unrecognized future status from upstream isn't silently miscategorized
+# as still-live.
+LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
+FULLY_SATISFIED_STATUS = "fully-satisfied"
 
 
 def _normalise_company_number(v: str) -> str:
@@ -97,37 +112,37 @@ def _officer_id_from_links(links: dict[str, Any]) -> str | None:
 # Shared fetch helpers (used by both tools and resources)
 # ---------------------------------------------------------------------------
 
+def _summarize_has_charges(charges: list[CompanyCharge]) -> bool | None:
+    """Tri-state has_charges summary from a complete charge collection.
+
+    True: at least one charge is confirmed live (outstanding/part-satisfied).
+    False: every charge is confirmed fully-satisfied (or there are none —
+    vacuously true for an empty list, so this branch correctly covers both
+    "no charges at all" and "all resolved").
+    None: at least one charge has an unrecognized or missing status and
+    none are confirmed live — refuse to guess False when the data doesn't
+    support it, same discipline as the endpoint-failure case below.
+    """
+    if any(c.status in LIVE_CHARGE_STATUSES for c in charges):
+        return True
+    if all(c.status == FULLY_SATISFIED_STATUS for c in charges):
+        return False
+    return None
+
+
 async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
         data = resp.json()
 
-        has_charges: bool | None = None
-        try:
-            start_index = 0
-            page_size = 100
-            while True:
-                charges_resp = await _request_with_retry(
-                    client,
-                    "GET",
-                    f"/company/{company_number}/charges",
-                    params={"items_per_page": page_size, "start_index": start_index},
-                )
-                charges_data = charges_resp.json()
-                charges_items = charges_data.get("items") or []
-                if any(item.get("status") == "outstanding" for item in charges_items):
-                    has_charges = True
-                    break
-
-                total_count = int(charges_data.get("total_count", len(charges_items)) or 0)
-                start_index += len(charges_items)
-                if not charges_items or start_index >= total_count or len(charges_items) < page_size:
-                    has_charges = False
-                    break
-        except (ToolError, httpx.HTTPError):
-            logger.warning(
-                "charges check failed for %s — has_charges is unknown", company_number
-            )
+    has_charges: bool | None = None
+    try:
+        charges_result = await _fetch_company_charges(company_number)
+        has_charges = _summarize_has_charges(charges_result.charges)
+    except (ToolError, httpx.HTTPError):
+        logger.warning(
+            "charges check failed for %s — has_charges is unknown", company_number
+        )
 
     accs_raw = data.get("accounts") or {}
     conf_raw = data.get("confirmation_statement") or {}
@@ -319,6 +334,103 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
     )
 
 
+def _map_charge(raw: dict[str, Any]) -> CompanyCharge:
+    classification_raw = raw.get("classification")
+    particulars_raw = raw.get("particulars")
+    secured_details_raw = raw.get("secured_details")
+    return CompanyCharge(
+        charge_number=raw.get("charge_number"),
+        charge_code=raw.get("charge_code"),
+        status=raw.get("status"),
+        classification=ChargeClassification(**classification_raw) if classification_raw else None,
+        created_on=raw.get("created_on"),
+        delivered_on=raw.get("delivered_on"),
+        satisfied_on=raw.get("satisfied_on"),
+        particulars=ChargeParticulars(**particulars_raw) if particulars_raw else None,
+        secured_details=ChargeSecuredDetails(**secured_details_raw) if secured_details_raw else None,
+        persons_entitled=[
+            ChargePersonEntitled(name=p.get("name")) for p in (raw.get("persons_entitled") or [])
+        ],
+        transactions=[
+            ChargeTransaction(
+                filing_type=t.get("filing_type"),
+                delivered_on=t.get("delivered_on"),
+                links=t.get("links") or {},
+            )
+            for t in (raw.get("transactions") or [])
+        ],
+        links=raw.get("links") or {},
+    )
+
+
+async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
+    raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    attempted = f"GET /company/{company_number}/charges"
+    async with companies_house_client() as client:
+        start_index = 0
+        page_size = 100
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/company/{company_number}/charges",
+                params={"items_per_page": page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            if not top:
+                top = data
+            page_items = data.get("items", []) or []
+            total_count = int(data.get("total_count", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_count:
+                # Upstream said there should be more, but this page came
+                # back empty. Not "must be the end" — an incomplete
+                # collection returned silently is worse than no result.
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"Charges pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_count={total_count} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
+            raw_items.extend(page_items)
+            start_index += len(page_items)
+            if start_index >= total_count:
+                break
+
+    charges = [_map_charge(raw) for raw in raw_items]
+    result_total_count = int(top.get("total_count", len(charges)) or 0)
+
+    if len(charges) != result_total_count:
+        # Post-loop invariant, not just trust in the loop's own logic —
+        # catches anything the mid-loop guard above didn't (e.g. a
+        # duplicate/extra item on the last page inflating the count past
+        # what upstream originally reported).
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Charges collection incomplete or inconsistent: received "
+                f"{len(charges)} charges but upstream reported "
+                f"total_count={result_total_count}."
+            ),
+        )
+
+    return CompanyChargesResult(
+        company_number=company_number,
+        total_count=result_total_count,
+        unfiltered_count=top.get("unfiltered_count"),
+        satisfied_count=top.get("satisfied_count"),
+        part_satisfied_count=top.get("part_satisfied_count"),
+        charges=charges,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -504,6 +616,35 @@ def register_tools(mcp: FastMCP) -> None:
         """
         return await _fetch_officer_appointments(officer_id)
 
+    # ------------------------------------------------------------------ #
+    # 6. company_charges
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="company_charges",
+        annotations={
+            "title": "Get Company Charges",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def company_charges(
+        company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+    ) -> CompanyChargesResult:
+        """Fetch the complete Companies House charge history for a company.
+
+        Returns every registered charge (secured debt) — current and
+        historic — with status, dates, secured parties, and what each
+        charge covers (fixed/floating/negative-pledge flags and any
+        free-text particulars). Satisfaction is represented as
+        satisfied_on plus a charge-satisfaction filing entry, not a
+        separate 'release' record. company_profile.has_charges is a
+        True/False/unknown summary derived from this same data; use this
+        tool when the specific charges matter, not just whether any exist.
+        """
+        return await _fetch_company_charges(_normalise_company_number(company_number))
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -562,4 +703,18 @@ def register_resources(mcp: FastMCP) -> None:
     )
     async def officer_appointments_resource(officer_id: str) -> str:
         result = await _fetch_officer_appointments(officer_id)
+        return result.model_dump_json()
+
+    @mcp.resource(
+        "company://{company_number}/charges",
+        name="company_charges",
+        description=(
+            "Complete Companies House charge history for a company number: "
+            "every registered charge, current and historic, with status, "
+            "dates, secured parties, and what each charge covers."
+        ),
+        mime_type="application/json",
+    )
+    async def company_charges_resource(company_number: str) -> str:
+        result = await _fetch_company_charges(_normalise_company_number(company_number))
         return result.model_dump_json()

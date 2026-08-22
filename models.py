@@ -153,9 +153,13 @@ class CompanyProfile(BaseModel):
     has_charges: bool | None = Field(
         None,
         description=(
-            "True if the company has outstanding registered charges (secured debt), "
-            "False if the charges endpoint was checked completely and none are outstanding, "
-            "or null if the charges check could not be completed."
+            "True if the company has at least one outstanding or "
+            "part-satisfied charge (secured debt) — not yet fully "
+            "discharged. False if every charge on record is fully "
+            "satisfied, or there are none. Null if the charges check "
+            "could not be completed, or if a charge was returned with an "
+            "unrecognized status that can't be confidently classified. "
+            "Use company_charges for the full charge-by-charge detail."
         ),
     )
     accounts: CompanyAccountsSummary = Field(
@@ -401,6 +405,175 @@ class CompanyPSCResult(BaseModel):
             "Explanatory note when total=0. Typical for widely-held listed PLCs "
             "where no single person or entity holds 25%+ of shares or voting rights."
         ),
+    )
+
+
+class ChargeParticulars(BaseModel):
+    """What a charge covers — free text and/or boolean flags.
+
+    Field presence varies by charge age/type: pre-2006 debentures often
+    carry only type/description with no boolean flags; MR01-style charges
+    (2013+) often carry only the boolean flags with no free text. Every
+    field is optional — do not assume any subset is always present.
+    """
+
+    model_config = BASE_CFG
+
+    type: str | None = Field(
+        None, description="Particulars entry type as returned by CH (e.g. 'brief-description', 'short-particulars')."
+    )
+    description: str | None = Field(
+        None, description="Free-text description of what the charge covers, where filed."
+    )
+    contains_floating_charge: bool | None = Field(
+        None, description="True if the charge includes a floating charge."
+    )
+    contains_fixed_charge: bool | None = Field(
+        None, description="True if the charge includes a fixed charge."
+    )
+    floating_charge_covers_all: bool | None = Field(
+        None, description="True if the floating charge covers the whole undertaking/all assets."
+    )
+    contains_negative_pledge: bool | None = Field(
+        None, description="True if the charge includes a negative pledge (restricting further charges)."
+    )
+
+
+class ChargeSecuredDetails(BaseModel):
+    """Free-text 'amount secured' description.
+
+    Seen only on older/pre-2006 charge filings — absent on newer
+    MR01-style charges, which express scope entirely through
+    ChargeParticulars' boolean flags instead. Optional, not assume-present.
+    """
+
+    model_config = BASE_CFG
+
+    type: str | None = Field(
+        None, description="Secured-details entry type as returned by CH (e.g. 'amount-secured')."
+    )
+    description: str | None = Field(
+        None, description="Free-text description of the amount/obligation secured."
+    )
+
+
+class ChargeClassification(BaseModel):
+    """Charge type classification (e.g. 'A registered charge', 'Debenture')."""
+
+    model_config = BASE_CFG
+
+    type: str | None = Field(
+        None, description="Classification type as returned by CH (e.g. 'charge-description')."
+    )
+    description: str | None = Field(
+        None, description="Human-readable charge type (e.g. 'A registered charge', 'Debenture')."
+    )
+
+
+class ChargePersonEntitled(BaseModel):
+    """A secured party named on a charge."""
+
+    model_config = BASE_CFG
+
+    name: str | None = Field(
+        None, description="Name of the person or entity entitled under this charge, as filed."
+    )
+
+
+class ChargeTransaction(BaseModel):
+    """A filing event against a charge (creation, satisfaction, etc.)."""
+
+    model_config = BASE_CFG
+
+    filing_type: str | None = Field(
+        None, description="Filing type (e.g. 'create-charge-with-deed', 'charge-satisfaction')."
+    )
+    delivered_on: str | None = Field(
+        None, description="Date this filing was delivered (ISO YYYY-MM-DD)."
+    )
+    links: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Upstream relational links, e.g. links.filing = filing-history path.",
+    )
+
+
+class CompanyCharge(BaseModel):
+    """A single Companies House charge (secured debt registration).
+
+    Satisfaction is represented via satisfied_on and a transactions[]
+    entry with filing_type == 'charge-satisfaction' — there is no
+    separate 'release' concept upstream, so none is invented here.
+    """
+
+    model_config = BASE_CFG
+
+    charge_number: int = Field(
+        ..., description="Sequential charge number for this company. Always present, unlike charge_code."
+    )
+    charge_code: str | None = Field(
+        None,
+        description=(
+            "Human-readable charge ID (e.g. '063334690005'). Absent on some "
+            "older charges (e.g. pre-2006 debentures) — use charge_number "
+            "as the reliable identifier."
+        ),
+    )
+    status: str | None = Field(
+        None,
+        description="Charge status as returned upstream (e.g. 'outstanding', 'part-satisfied', 'fully-satisfied').",
+    )
+    classification: ChargeClassification | None = Field(
+        None, description="Charge type classification."
+    )
+    created_on: str | None = Field(
+        None, description="Date the charge was created (ISO YYYY-MM-DD)."
+    )
+    delivered_on: str | None = Field(
+        None, description="Date the charge was delivered/registered (ISO YYYY-MM-DD)."
+    )
+    satisfied_on: str | None = Field(
+        None, description="Date the charge was satisfied, or null if still live."
+    )
+    particulars: ChargeParticulars | None = Field(
+        None, description="What the charge covers — free text and/or boolean flags, depending on charge age/type."
+    )
+    secured_details: ChargeSecuredDetails | None = Field(
+        None, description="Free-text amount-secured description. Present only on some older charges."
+    )
+    persons_entitled: list[ChargePersonEntitled] = Field(
+        default_factory=list, description="Secured parties named on this charge."
+    )
+    transactions: list[ChargeTransaction] = Field(
+        default_factory=list,
+        description=(
+            "Filing events against this charge — creation, satisfaction, etc. "
+            "Satisfaction is represented here (filing_type='charge-satisfaction') "
+            "and via satisfied_on, not a separate 'release' concept."
+        ),
+    )
+    links: dict[str, Any] = Field(
+        default_factory=dict, description="Upstream relational links, e.g. links.self = charge record path."
+    )
+
+
+class CompanyChargesResult(BaseModel):
+    """Complete charge history for a company."""
+
+    model_config = BASE_CFG
+
+    company_number: str = Field(..., description="Companies House company number.")
+    total_count: int = Field(..., description="Total charges returned.")
+    unfiltered_count: int | None = Field(
+        None, description="Upstream unfiltered charge count, or null if not provided."
+    )
+    satisfied_count: int | None = Field(
+        None, description="Upstream count of satisfied charges, or null if not provided."
+    )
+    part_satisfied_count: int | None = Field(
+        None, description="Upstream count of part-satisfied charges, or null if not provided."
+    )
+    charges: list[CompanyCharge] = Field(
+        default_factory=list, description="Every charge, current and historic."
     )
 
 

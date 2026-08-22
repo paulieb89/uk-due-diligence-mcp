@@ -22,7 +22,7 @@ def _mock_client_factory(handler):
 async def test_company_profile_maps_type_and_scans_all_charge_pages(monkeypatch):
     """Profile must read CH `type` and not infer charge state from page one only."""
 
-    satisfied = [{"status": "satisfied", "id": str(i)} for i in range(100)]
+    satisfied = [{"charge_number": i, "status": "fully-satisfied"} for i in range(100)]
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/company/07463956":
@@ -43,7 +43,7 @@ async def test_company_profile_maps_type_and_scans_all_charge_pages(monkeypatch)
                 return httpx.Response(200, json={"total_count": 101, "items": satisfied})
             return httpx.Response(
                 200,
-                json={"total_count": 101, "items": [{"status": "outstanding", "id": "live"}]},
+                json={"total_count": 101, "items": [{"charge_number": 100, "status": "outstanding"}]},
             )
         raise AssertionError(f"unexpected request: {request.url}")
 
