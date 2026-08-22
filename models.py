@@ -194,6 +194,14 @@ class CompanyOfficer(BaseModel):
         default_factory=dict,
         description="Partial date of birth (month/year) as returned by CH.",
     )
+    officer_id: str | None = Field(
+        None,
+        description=(
+            "Companies House officer ID, extracted from links.officer.appointments. "
+            "Pass to officer_appointments to discover this person's full appointment "
+            "history across companies, including dissolved or insolvent ones."
+        ),
+    )
     appointment_count: int | None = Field(
         None,
         description=(
@@ -236,6 +244,82 @@ class CompanyOfficersResult(BaseModel):
     officers: list[CompanyOfficer] = Field(
         default_factory=list,
         description="Officer records.",
+    )
+
+
+class OfficerAppointment(BaseModel):
+    """A single appointment from an officer's full appointment history."""
+
+    model_config = BASE_CFG
+
+    company_number: str | None = Field(
+        None, description="Companies House company number for this appointment."
+    )
+    company_name: str | None = Field(
+        None, description="Company name as recorded at CH for this appointment."
+    )
+    company_status: str | None = Field(
+        None,
+        description=(
+            "Company status at the time of lookup (e.g. 'active', 'liquidation', "
+            "'dissolved'), as returned upstream. Companies House does not "
+            "auto-resign directors on insolvency, so resigned_on may be null "
+            "even when company_status shows the company is no longer trading — "
+            "check company_status, not just resigned_on, to assess a relationship."
+        ),
+    )
+    officer_role: str | None = Field(
+        None, description="Officer role at this company (e.g. 'director', 'secretary')."
+    )
+    appointed_on: str | None = Field(
+        None, description="Date of appointment (ISO YYYY-MM-DD)."
+    )
+    resigned_on: str | None = Field(
+        None, description="Date of resignation, or null if not resigned."
+    )
+    nationality: str | None = Field(None, description="Declared nationality.")
+    country_of_residence: str | None = Field(
+        None, description="Declared country of residence."
+    )
+    address: dict[str, Any] = Field(
+        default_factory=dict, description="Officer correspondence address for this appointment."
+    )
+    links: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Upstream relational links, e.g. links.company = '/company/{number}'.",
+    )
+
+
+class OfficerAppointmentsResult(BaseModel):
+    """A person's full appointment history across companies, by officer ID."""
+
+    model_config = BASE_CFG
+
+    officer_id: str = Field(..., description="Companies House officer ID.")
+    name: str | None = Field(None, description="Officer name as recorded at CH.")
+    date_of_birth: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Partial date of birth (month/year), or empty if not disclosed upstream.",
+    )
+    total: int = Field(..., description="Total appointments returned.")
+    active_count: int | None = Field(
+        None, description="Upstream count of active appointments, or null if not provided."
+    )
+    resigned_count: int | None = Field(
+        None, description="Upstream count of resigned appointments, or null if not provided."
+    )
+    inactive_count: int | None = Field(
+        None,
+        description=(
+            "Upstream count of appointments Companies House categorizes as "
+            "'inactive', passed through as-is. Exact categorization semantics "
+            "have not been independently verified against per-appointment "
+            "data — treat as an unverified upstream fact, not a derived signal, "
+            "or null if not provided."
+        ),
+    )
+    appointments: list[OfficerAppointment] = Field(
+        default_factory=list, description="Every appointment, current and historic."
     )
 
 
