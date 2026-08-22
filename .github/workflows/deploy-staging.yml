@@ -1,0 +1,79 @@
+name: Deploy Staging
+
+# Deploys every successful push to main to the persistent staging Fly app
+# (uk-due-diligence-mcp-staging), independent of release.yml — staging tracks
+# main directly via flyctl deploy, not the PyPI release pipeline, so it stays
+# current between releases. release.yml (prod, release-gated) is untouched.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+jobs:
+  verify:
+    name: Test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --group dev
+      - run: uv run --no-sync pytest tests/ -q
+      - run: uv build
+
+  deploy:
+    name: Deploy to Fly (staging)
+    runs-on: ubuntu-latest
+    needs: verify
+    environment:
+      name: staging
+      url: https://uk-due-diligence-mcp-staging.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to staging
+        run: |
+          flyctl deploy \
+            --config fly.staging.toml \
+            --app uk-due-diligence-mcp-staging \
+            --remote-only \
+            --ha=false \
+            --wait-timeout 300 \
+            --image-label "${{ github.sha }}"
+
+      - name: Post-deploy health check
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://uk-due-diligence-mcp-staging.fly.dev/health)
+            if [ "$code" = "200" ]; then
+              echo "Health check passed (HTTP $code) on attempt $i"
+              exit 0
+            fi
+            echo "Health check attempt $i: HTTP $code — retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 10 attempts"
+          exit 1
+
+      - name: Record deployed commit
+        if: always()
+        run: |
+          {
+            echo "### Staging deploy"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Image label: \`${{ github.sha }}\`"
+            echo "- App: uk-due-diligence-mcp-staging"
+            echo "- URL: https://uk-due-diligence-mcp-staging.fly.dev"
+          } >> "$GITHUB_STEP_SUMMARY"
