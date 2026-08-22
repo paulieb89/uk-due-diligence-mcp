@@ -29,6 +29,8 @@ from models import (
     CompanyPSCResult,
     CompanySearchItem,
     CompanySearchResult,
+    OfficerAppointment,
+    OfficerAppointmentsResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,25 @@ def _truncate_natures(natures: list[str], max_chars: int) -> list[str]:
         else:
             out.append(n)
     return out
+
+
+def _officer_id_from_links(links: dict[str, Any]) -> str | None:
+    """Extract the officer ID from an officer's links.officer.appointments URL.
+
+    Distinct from disqualified.py's `_extract_officer_id`, which reads a
+    different link shape (the `self` link's tail). Here the officer ID is
+    the path segment between `/officers/` and `/appointments`, e.g.
+    "/officers/EAoJ81mtThuKM5KmSuO5U1RNLHs/appointments" ->
+    "EAoJ81mtThuKM5KmSuO5U1RNLHs".
+    """
+    officer_links = (links or {}).get("officer")
+    appointments_link = officer_links.get("appointments") if isinstance(officer_links, dict) else None
+    if not appointments_link:
+        return None
+    parts = [p for p in str(appointments_link).split("/") if p]
+    if len(parts) >= 2 and parts[0] == "officers":
+        return parts[1]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +187,7 @@ async def _fetch_company_officers(
             country_of_residence=raw.get("country_of_residence"),
             occupation=raw.get("occupation"),
             date_of_birth=raw.get("date_of_birth") or {},
+            officer_id=_officer_id_from_links(raw.get("links") or {}),
             appointment_count=None,
             address=raw.get("address") or {},
             links=raw.get("links") or {},
@@ -235,6 +257,65 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
         overseas_corporate_psc_flag=overseas_flag,
         psc=psc_entries,
         note=note,
+    )
+
+
+async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsResult:
+    oid = officer_id.strip()
+    raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    async with companies_house_client() as client:
+        start_index = 0
+        # CH clamps items_per_page to 50 on this endpoint regardless of the
+        # requested value (confirmed live: requesting 100 still returns
+        # items_per_page=50 in the response) — unlike /officers, which
+        # allows up to 100. That cap is why a large officer needs multiple
+        # requests, but it is NOT the termination signal: a page coming
+        # back shorter than requested is not reliable evidence of
+        # completion. The loop paginates strictly to total_results.
+        requested_page_size = 50
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/officers/{oid}/appointments",
+                params={"items_per_page": requested_page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            if not top:
+                top = data
+            page_items = data.get("items", []) or []
+            raw_items.extend(page_items)
+            total_results = int(data.get("total_results", len(raw_items)) or 0)
+            start_index += len(page_items)
+            if not page_items or start_index >= total_results:
+                break
+
+    appointments = [
+        OfficerAppointment(
+            company_number=(raw.get("appointed_to") or {}).get("company_number"),
+            company_name=(raw.get("appointed_to") or {}).get("company_name"),
+            company_status=(raw.get("appointed_to") or {}).get("company_status"),
+            officer_role=raw.get("officer_role"),
+            appointed_on=raw.get("appointed_on"),
+            resigned_on=raw.get("resigned_on"),
+            nationality=raw.get("nationality"),
+            country_of_residence=raw.get("country_of_residence"),
+            address=raw.get("address") or {},
+            links=raw.get("links") or {},
+        )
+        for raw in raw_items
+    ]
+
+    return OfficerAppointmentsResult(
+        officer_id=oid,
+        name=top.get("name"),
+        date_of_birth=top.get("date_of_birth") or {},
+        total=int(top.get("total_results", len(appointments)) or 0),
+        active_count=top.get("active_count"),
+        resigned_count=top.get("resigned_count"),
+        inactive_count=top.get("inactive_count"),
+        appointments=appointments,
     )
 
 
@@ -395,6 +476,34 @@ def register_tools(mcp: FastMCP) -> None:
         """
         return await _fetch_company_psc(_normalise_company_number(company_number))
 
+    # ------------------------------------------------------------------ #
+    # 5. officer_appointments
+    # ------------------------------------------------------------------ #
+    @mcp.tool(
+        name="officer_appointments",
+        annotations={
+            "title": "Get Officer Appointment History",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
+        },
+    )
+    async def officer_appointments(
+        officer_id: Annotated[str, Field(description="Companies House officer ID. Returned as officer_id on entries from company_officers.", min_length=1, max_length=100)],
+    ) -> OfficerAppointmentsResult:
+        """Fetch a person's full company appointment history by officer ID.
+
+        Returns every appointment — current and historic — with each
+        company's number, name, status, role, and appointment/resignation
+        dates. Use company_officers first to find an officer_id, then this
+        tool to discover other companies that person has been a director
+        or secretary of, including dissolved or insolvent ones not
+        mentioned anywhere else. Always returns full history; there is no
+        current-only filter, since historical discovery is the point.
+        """
+        return await _fetch_officer_appointments(officer_id)
+
 
 # ---------------------------------------------------------------------------
 # Resource registration
@@ -439,4 +548,18 @@ def register_resources(mcp: FastMCP) -> None:
     )
     async def company_psc_resource(company_number: str) -> str:
         result = await _fetch_company_psc(_normalise_company_number(company_number))
+        return result.model_dump_json()
+
+    @mcp.resource(
+        "officer://{officer_id}/appointments",
+        name="officer_appointments",
+        description=(
+            "Full appointment history for a Companies House officer ID: every "
+            "company they've been a director/secretary of, current and historic, "
+            "with company status, role, and dates."
+        ),
+        mime_type="application/json",
+    )
+    async def officer_appointments_resource(officer_id: str) -> str:
+        result = await _fetch_officer_appointments(officer_id)
         return result.model_dump_json()
