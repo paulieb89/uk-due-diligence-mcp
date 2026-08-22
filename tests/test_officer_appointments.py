@@ -89,3 +89,107 @@ async def test_fetch_company_officers_populates_officer_id(monkeypatch):
     result = await companies_house._fetch_company_officers("06333469")
 
     assert result.officers[0].officer_id == "EAoJ81mtThuKM5KmSuO5U1RNLHs"
+
+
+def _appointment_item(company_number, company_name, company_status, resigned_on=None):
+    return {
+        "appointed_to": {
+            "company_number": company_number,
+            "company_name": company_name,
+            "company_status": company_status,
+        },
+        "officer_role": "director",
+        "appointed_on": "2014-07-07",
+        "resigned_on": resigned_on,
+        "nationality": "British",
+        "country_of_residence": "England",
+        "address": {"locality": "Uttoxeter"},
+        "links": {"company": f"/company/{company_number}"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_officer_appointments_maps_tas_gareth_mel_fixture(monkeypatch):
+    """Mirrors the real acceptance case: one officer, three companies,
+    spanning active/liquidation/dissolved — MEL's resigned_on stays null
+    even though it's in liquidation, matching live CH behavior."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/officers/EAoJ81mtThuKM5KmSuO5U1RNLHs/appointments"
+        return httpx.Response(
+            200,
+            json={
+                "name": "Gareth Leonard DAVIES",
+                "date_of_birth": {"month": 9, "year": 1964},
+                "active_count": 2,
+                "resigned_count": 0,
+                "inactive_count": 1,
+                "items_per_page": 50,
+                "total_results": 3,
+                "items": [
+                    _appointment_item("12609854", "FXF DESIGNS LTD", "dissolved"),
+                    _appointment_item("09118548", "MEL PRECISION LIMITED", "liquidation"),
+                    _appointment_item("06333469", "TAS ENGINEERING LTD", "active"),
+                ],
+            },
+        )
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_officer_appointments("EAoJ81mtThuKM5KmSuO5U1RNLHs")
+
+    assert result.total == 3
+    assert result.active_count == 2
+    assert result.resigned_count == 0
+    assert result.inactive_count == 1
+    by_number = {a.company_number: a for a in result.appointments}
+    assert by_number["09118548"].company_status == "liquidation"
+    assert by_number["09118548"].resigned_on is None
+    assert by_number["06333469"].company_status == "active"
+    assert by_number["12609854"].company_status == "dissolved"
+
+
+@pytest.mark.asyncio
+async def test_officer_appointments_date_of_birth_defaults_empty_when_absent(monkeypatch):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "name": "CORPORATE OFFICER LTD",
+                "total_results": 0,
+                "items_per_page": 50,
+                "items": [],
+            },
+        )
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_officer_appointments("SOME-CORPORATE-OFFICER-ID")
+
+    assert result.date_of_birth == {}
+    assert result.appointments == []
+
+
+@pytest.mark.asyncio
+async def test_officer_appointments_paginates_past_ch_50_item_cap(monkeypatch):
+    """CH clamps items_per_page to 50 on this endpoint regardless of what's
+    requested. total_results=75 across two pages must yield exactly 75
+    appointments — the pagination-completeness acceptance criterion."""
+
+    page_one = [_appointment_item(f"{10000000 + i}", f"COMPANY {i}", "active") for i in range(50)]
+    page_two = [_appointment_item(f"{10000050 + i}", f"COMPANY {i}", "active") for i in range(25)]
+    requested_start_indexes = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        requested_start_indexes.append(start)
+        # CH always reports items_per_page=50 in the response, even if a
+        # larger value was requested.
+        if start == 0:
+            return httpx.Response(200, json={"total_results": 75, "items_per_page": 50, "items": page_one})
+        return httpx.Response(200, json={"total_results": 75, "items_per_page": 50, "items": page_two})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_officer_appointments("BIG-PORTFOLIO-OFFICER")
+
+    assert len(result.appointments) == 75
+    assert result.total == 75
+    assert requested_start_indexes == [0, 50]

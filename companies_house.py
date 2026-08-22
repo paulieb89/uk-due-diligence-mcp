@@ -29,6 +29,8 @@ from models import (
     CompanyPSCResult,
     CompanySearchItem,
     CompanySearchResult,
+    OfficerAppointment,
+    OfficerAppointmentsResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -255,6 +257,65 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
         overseas_corporate_psc_flag=overseas_flag,
         psc=psc_entries,
         note=note,
+    )
+
+
+async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsResult:
+    oid = officer_id.strip()
+    raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    async with companies_house_client() as client:
+        start_index = 0
+        # CH clamps items_per_page to 50 on this endpoint regardless of the
+        # requested value (confirmed live: requesting 100 still returns
+        # items_per_page=50 in the response) — unlike /officers, which
+        # allows up to 100. That cap is why a large officer needs multiple
+        # requests, but it is NOT the termination signal: a page coming
+        # back shorter than requested is not reliable evidence of
+        # completion. The loop paginates strictly to total_results.
+        requested_page_size = 50
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/officers/{oid}/appointments",
+                params={"items_per_page": requested_page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            if not top:
+                top = data
+            page_items = data.get("items", []) or []
+            raw_items.extend(page_items)
+            total_results = int(data.get("total_results", len(raw_items)) or 0)
+            start_index += len(page_items)
+            if not page_items or start_index >= total_results:
+                break
+
+    appointments = [
+        OfficerAppointment(
+            company_number=(raw.get("appointed_to") or {}).get("company_number"),
+            company_name=(raw.get("appointed_to") or {}).get("company_name"),
+            company_status=(raw.get("appointed_to") or {}).get("company_status"),
+            officer_role=raw.get("officer_role"),
+            appointed_on=raw.get("appointed_on"),
+            resigned_on=raw.get("resigned_on"),
+            nationality=raw.get("nationality"),
+            country_of_residence=raw.get("country_of_residence"),
+            address=raw.get("address") or {},
+            links=raw.get("links") or {},
+        )
+        for raw in raw_items
+    ]
+
+    return OfficerAppointmentsResult(
+        officer_id=oid,
+        name=top.get("name"),
+        date_of_birth=top.get("date_of_birth") or {},
+        total=int(top.get("total_results", len(appointments)) or 0),
+        active_count=top.get("active_count"),
+        resigned_count=top.get("resigned_count"),
+        inactive_count=top.get("inactive_count"),
+        appointments=appointments,
     )
 
 
