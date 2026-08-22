@@ -81,23 +81,31 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
         data = resp.json()
 
-        has_charges = False
+        has_charges: bool | None = None
         try:
-            charges_resp = await _request_with_retry(
-                client, "GET", f"/company/{company_number}/charges",
-                params={"items_per_page": 1},
-            )
-            charges_data = charges_resp.json()
-            charges_items = charges_data.get("items") or []
-            has_charges = any(
-                item.get("status") == "outstanding" for item in charges_items
-            ) or (
-                charges_data.get("total_count", 0) > 0
-                and not charges_items
-            )
+            start_index = 0
+            page_size = 100
+            while True:
+                charges_resp = await _request_with_retry(
+                    client,
+                    "GET",
+                    f"/company/{company_number}/charges",
+                    params={"items_per_page": page_size, "start_index": start_index},
+                )
+                charges_data = charges_resp.json()
+                charges_items = charges_data.get("items") or []
+                if any(item.get("status") == "outstanding" for item in charges_items):
+                    has_charges = True
+                    break
+
+                total_count = int(charges_data.get("total_count", len(charges_items)) or 0)
+                start_index += len(charges_items)
+                if not charges_items or start_index >= total_count or len(charges_items) < page_size:
+                    has_charges = False
+                    break
         except (ToolError, httpx.HTTPError):
             logger.warning(
-                "charges check failed for %s — has_charges omitted", company_number
+                "charges check failed for %s — has_charges is unknown", company_number
             )
 
     accs_raw = data.get("accounts") or {}
@@ -107,7 +115,7 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
         company_number=str(data.get("company_number") or company_number),
         company_name=data.get("company_name"),
         company_status=data.get("company_status"),
-        company_type=data.get("company_type"),
+        company_type=data.get("type"),
         date_of_creation=data.get("date_of_creation"),
         sic_codes=list(data.get("sic_codes") or []),
         registered_office_address=data.get("registered_office_address") or {},
@@ -124,16 +132,30 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     )
 
 
-async def _fetch_company_officers(company_number: str) -> CompanyOfficersResult:
+async def _fetch_company_officers(
+    company_number: str, *, include_resigned: bool = False
+) -> CompanyOfficersResult:
+    raw_items: list[dict[str, Any]] = []
     async with companies_house_client() as client:
-        resp = await _request_with_retry(
-            client, "GET",
-            f"/company/{company_number}/officers",
-            params={"items_per_page": 100},
-        )
-        data = resp.json()
+        start_index = 0
+        page_size = 100
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/company/{company_number}/officers",
+                params={"items_per_page": page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            page_items = data.get("items", []) or []
+            raw_items.extend(page_items)
+            total_results = int(data.get("total_results", len(raw_items)) or 0)
+            start_index += len(page_items)
+            if not page_items or start_index >= total_results or len(page_items) < page_size:
+                break
 
-    raw_items = [o for o in (data.get("items", []) or []) if not o.get("resigned_on")]
+    if not include_resigned:
+        raw_items = [o for o in raw_items if not o.get("resigned_on")]
     officers = [
         CompanyOfficer(
             name=raw.get("name"),
@@ -152,7 +174,7 @@ async def _fetch_company_officers(company_number: str) -> CompanyOfficersResult:
     ]
     return CompanyOfficersResult(
         company_number=company_number,
-        include_resigned=False,
+        include_resigned=include_resigned,
         total=len(officers),
         high_appointment_count_flag=None,
         officers=officers,
@@ -181,6 +203,7 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
             ceased_on=raw.get("ceased_on"),
             nationality=raw.get("nationality"),
             country_of_residence=raw.get("country_of_residence"),
+            date_of_birth=raw.get("date_of_birth") or {},
             natures_of_control=natures,
             identification=raw.get("identification") or {},
             address=raw.get("address") or {},
@@ -191,8 +214,13 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
             "corporate-entity-person-with-significant-control",
             "legal-person-person-with-significant-control",
         ):
-            place = (entry.identification.get("place_registered") or "").upper()
-            if place not in UK_JURISDICTIONS:
+            jurisdiction = (
+                entry.identification.get("country_registered")
+                or entry.identification.get("legal_authority")
+                or ""
+            )
+            normalised = " ".join(str(jurisdiction).upper().replace("&", "AND").split())
+            if normalised and normalised not in UK_JURISDICTIONS:
                 overseas_flag += 1
 
     note = None
@@ -269,7 +297,7 @@ def register_tools(mcp: FastMCP) -> None:
                 company_type=raw.get("company_type"),
                 date_of_creation=raw.get("date_of_creation"),
                 sic_codes=list(raw.get("sic_codes") or []),
-                address=raw.get("registered_office_address") or {},
+                address=raw.get("address") or raw.get("registered_office_address") or {},
                 description=raw.get("description"),
             )
             for raw in raw_items
@@ -327,18 +355,20 @@ def register_tools(mcp: FastMCP) -> None:
     )
     async def company_officers(
         company_number: Annotated[str, Field(description="Companies House company number (8 digits, e.g. '03782379'). Returned by company_search.", min_length=1, max_length=10)],
+        include_resigned: Annotated[bool, Field(description="Include resigned/historic officers. Default false for backwards-compatible current-officer queries.")] = False,
         items_per_page: Annotated[int | None, Field(description="Ignored — pagination is handled internally. Only accepted to avoid call failures.")] = None,
-        start_index: Annotated[int | None, Field(description="Ignored — all officers are returned in one call.")] = None,
+        start_index: Annotated[int | None, Field(description="Ignored — pagination is handled internally. Only accepted to avoid call failures.")] = None,
     ) -> CompanyOfficersResult:
-        """Fetch active officers for a Companies House company number.
+        """Fetch officers for a Companies House company number.
 
-        Returns directors, secretaries, and other active officers with
-        appointment dates, nationality, and country of residence.
-        Resigned officers are excluded. Pagination is handled internally —
-        do NOT pass items_per_page or start_index; this tool takes only
-        company_number.
+        Returns directors, secretaries, and other officers with appointment
+        dates, nationality, and country of residence. Resigned officers are
+        excluded by default; set include_resigned=true for historical DD.
+        Pagination is handled internally.
         """
-        return await _fetch_company_officers(_normalise_company_number(company_number))
+        return await _fetch_company_officers(
+            _normalise_company_number(company_number), include_resigned=include_resigned
+        )
 
     # ------------------------------------------------------------------ #
     # 4. company_psc
