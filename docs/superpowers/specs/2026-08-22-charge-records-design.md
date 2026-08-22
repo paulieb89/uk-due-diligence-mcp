@@ -62,10 +62,11 @@ derby street, burton upon trent, staffordshire DE14 2NS"), and the
   scalar fields. Aggressive flattening is exactly what produced the
   `has_charges` boolean's information loss in the first place.
 - **`has_charges` is not removed.** It stays on `company_profile` as a
-  cheap summary field, but must be derived consistently from the same
-  full charge data this tool returns — not a separate, potentially
-  divergent check. It stops being the primary DD surface; `company_charges`
-  is.
+  summary field — not "cheap" any more, since deriving it now means
+  fetching the full charge collection (see the acknowledged cost tradeoff
+  below) — but it must be derived consistently from the same full charge
+  data this tool returns, not a separate, potentially divergent check. It
+  stops being the primary DD surface; `company_charges` is.
 - **No interpretation of what a charge means for creditworthiness.**
   Same discipline as `officer_appointments`: pass upstream facts through
   (status, dates, flags, text), no derived risk score.
@@ -127,6 +128,27 @@ TAS's scale, but per the lesson from `officer_appointments`, the loop
 does not rely on that — same discipline as agreed there: **paginate
 strictly to `start_index >= total_count`**, never on "this page came back
 shorter than requested."
+
+**Completeness is enforced, not assumed.** A successful `_fetch_company_charges`
+call must return `len(charges) == total_count` — this is a contract, not
+just an emergent property of the loop. Two guards, not one:
+
+1. **Mid-loop**: if a page comes back empty while `start_index < total_count`
+   (an unexpected gap — the upstream said there should be more but a page
+   returned nothing), that's raised as a structured failure immediately,
+   with the exact `start_index`/`total_count` it broke at. It is not
+   silently treated as "must be the end" and returned as a truncated
+   collection — a truncated `company_charges` result is worse than no
+   result, since a caller has no way to know it's incomplete.
+2. **Post-loop**: after the loop completes, `len(charges) != total_count`
+   is also raised as a failure — a final invariant check catching anything
+   the mid-loop guard didn't (duplicate items across pages, an off-by-one,
+   or any other pagination inconsistency), not just relying on the loop's
+   internal logic being bug-free.
+
+Both cases raise as `"transient"`/`is_retryable=True` — an upstream
+pagination inconsistency is plausibly self-correcting on retry, not a
+caller input error.
 
 ### Models (`models.py`)
 
@@ -217,12 +239,29 @@ implementations that could drift.
 charge that's only partially discharged has not been resolved, and `False`
 would misrepresent that for DD. Use an explicit set of known live statuses
 rather than a complement check, so an unrecognized future status from
-upstream doesn't silently get miscategorized as "not a charge":
+upstream doesn't silently get miscategorized as "not a charge."
+
+**Second semantics fix (tri-state, not just bool)**: a bare `any(...)`
+check is still wrong on its own — it would report `False` for a company
+whose only charge has an unrecognized or missing `status` (some future CH
+status this code doesn't know about yet, or a malformed record), when the
+honest answer is "unknown," not "confirmed no live charges." `has_charges`
+must be `False` only when every charge is *confirmed* `fully-satisfied`
+(or there are none at all); `True` when at least one is confirmed live;
+`None` otherwise — mirroring the same "don't guess when the endpoint is
+ambiguous" discipline PR #4 already applies to the endpoint-failure case,
+just extended to per-record ambiguity too:
 
 ```python
 LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
+FULLY_SATISFIED_STATUS = "fully-satisfied"
 
-has_charges = any(c.status in LIVE_CHARGE_STATUSES for c in result.charges)
+def _summarize_has_charges(charges: list[CompanyCharge]) -> bool | None:
+    if any(c.status in LIVE_CHARGE_STATUSES for c in charges):
+        return True
+    if all(c.status == FULLY_SATISFIED_STATUS for c in charges):
+        return False  # vacuously True (and thus False here) for an empty list
+    return None
 ```
 
 **Failure propagation is not symmetric between the two call sites**, and
@@ -249,6 +288,7 @@ Full `has_charges` truth table for the acceptance tests:
 | At least one outstanding | `True` |
 | At least one part-satisfied (none outstanding) | `True` |
 | Empty (company has no charges at all) | `False` |
+| At least one charge has an unrecognized/missing status, and none are confirmed live | `None` |
 | Charges endpoint call fails | `None` |
 
 **Acknowledged cost tradeoff, not acted on in this PR**: routing
@@ -282,11 +322,15 @@ same as every other endpoint in this file. No special-casing.
   - Pagination-completeness: `len(charges) == total_count` across multiple
     pages, with an assertion on the exact `start_index` sequence requested
     (mirrors the `officer_appointments` pagination test).
+  - An unexpected empty page before `total_count` is reached raises a
+    structured `transient`/retryable error rather than silently returning
+    a truncated collection.
   - `secured_details`/`particulars` fields absent upstream do not raise —
     result field is `None`, not a validation error.
-  - `has_charges` on `company_profile`, covering the full truth table
-    above: all-fully-satisfied → `False`, outstanding → `True`,
-    part-satisfied-only → `True`, empty → `False`, charges-endpoint
+  - `has_charges` on `company_profile`, covering the full tri-state truth
+    table above: all-fully-satisfied → `False`, outstanding → `True`,
+    part-satisfied-only → `True`, empty → `False`, unrecognized/missing
+    status with no confirmed-live charge → `None`, charges-endpoint
     failure → `None` (the last one is a direct regression test for the
     PR #4 behavior this refactor must not silently break).
 - Live dogfooding against real TAS data before merge: reproduce the exact
@@ -309,10 +353,14 @@ same as every other endpoint in this file. No special-casing.
   subset of it.
 - At least one satisfied charge (4 or 1) returns `satisfied_on` populated
   and a `transactions` entry with `filing_type == "charge-satisfaction"`.
-- Pagination completeness holds under a multi-page mock.
+- Pagination completeness holds under a multi-page mock, enforced (not
+  just observed) — an unexpected empty page before `total_count` raises,
+  and `len(charges) == total_count` is a checked invariant on every
+  successful call.
 - `company_profile.has_charges` for TAS remains `True` (unchanged
   end-to-end behavior for TAS specifically — it has an outstanding charge)
   but is now derived from `company_charges`'s own data, not a separate
-  paginated fetch. The full truth table above (including part-satisfied
-  → `True` and endpoint-failure → `None`) is covered by dedicated fixture
-  tests, not just TAS's one case.
+  paginated fetch. The full tri-state truth table above (including
+  part-satisfied → `True`, unrecognized-status → `None`, and
+  endpoint-failure → `None`) is covered by dedicated fixture tests, not
+  just TAS's one case.
