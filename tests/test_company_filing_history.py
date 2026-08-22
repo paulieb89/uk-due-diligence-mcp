@@ -242,6 +242,67 @@ async def test_fetch_filing_history_has_more_false_on_last_page(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_fetch_filing_history_stalled_page_raises_transient(monkeypatch):
+    """total_count=323 promises more filings exist at start_index=100, but
+    the page comes back with zero items — a stalled page, not a valid
+    result. Must raise transient/retryable, not silently report
+    returned=0/has_more=True as if it were progress."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        assert start == 100
+        return httpx.Response(200, json={"total_count": 323, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+
+    with pytest.raises(ToolError) as exc_info:
+        await companies_house._fetch_company_filing_history("03782379", start_index=100)
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_filing_history_stalled_page_distinct_from_genuine_zero_history(monkeypatch):
+    """total_count=0 at start_index=0 is a genuine zero-history company
+    (via the existence probe), NOT a stalled page — must succeed, not
+    raise, even though the page is also empty."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/company/06333469/filing-history":
+            return httpx.Response(200, json={"total_count": 0, "items": []})
+        assert request.url.path == "/company/06333469"
+        return httpx.Response(200, json={"company_number": "06333469", "company_name": "TAS ENGINEERING LTD"})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_filing_history("06333469", start_index=0)
+
+    assert result.total_count == 0
+    assert result.filings == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_filing_history_stalled_page_distinct_from_beyond_end_page(monkeypatch):
+    """start_index >= total_count (caller paged past the end of a
+    non-empty history) is legitimately empty — NOT a stalled page — must
+    succeed with has_more=False, not raise."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        start = int(request.url.params.get("start_index", "0"))
+        assert start == 323
+        return httpx.Response(200, json={"total_count": 323, "items": []})
+
+    monkeypatch.setattr(companies_house, "companies_house_client", _mock_client_factory(handler))
+    result = await companies_house._fetch_company_filing_history("03782379", start_index=323)
+
+    assert result.total_count == 323
+    assert result.returned == 0
+    assert result.has_more is False
+
+
+@pytest.mark.asyncio
 async def test_fetch_filing_history_passes_category_filter_to_upstream(monkeypatch):
     seen_params = {}
 

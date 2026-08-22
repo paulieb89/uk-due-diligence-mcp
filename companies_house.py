@@ -586,6 +586,12 @@ async def _fetch_company_filing_history(
     minimal existence probe only when total_count is 0 for this query
     (not per-page: paging past the end of a non-empty history is not
     the same ambiguity and must not trigger this).
+
+    A page that comes back with zero items while total_count promises
+    more remain at this start_index (a stalled page) also raises —
+    distinct from both total_count == 0 (genuine zero-history) and
+    start_index >= total_count (caller paged past the end, legitimately
+    empty, not an error).
     """
     attempted = f"GET /company/{company_number}/filing-history"
     params: dict[str, Any] = {"items_per_page": items_per_page, "start_index": start_index}
@@ -620,6 +626,24 @@ async def _fetch_company_filing_history(
             # not_found via raise_http_tool_error; 200 confirms a genuine
             # empty result.
             await _request_with_retry(client, "GET", f"/company/{company_number}")
+        elif not raw_items and start_index < total_count:
+            # Stalled page: total_count promises more filings exist at
+            # this start_index, but the page came back with zero items.
+            # Distinct from total_count == 0 (genuine zero-history,
+            # handled above) and from start_index >= total_count (caller
+            # legitimately paged past the end — falls through below with
+            # returned=0, has_more=False, no error). Zero progress despite
+            # promised remaining items is not a valid result.
+            raise_tool_error(
+                "transient",
+                is_retryable=True,
+                attempted=attempted,
+                description=(
+                    f"Filing-history page at start_index={start_index} came back "
+                    f"empty but total_count={total_count} indicates more filings "
+                    f"exist — stalled page, not a valid result."
+                ),
+            )
 
     filings = [_map_filing(raw) for raw in raw_items]
     returned = len(filings)
