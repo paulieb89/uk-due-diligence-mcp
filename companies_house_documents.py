@@ -103,7 +103,17 @@ def _parse_document_id_from_metadata_url(url: str, *, attempted: str) -> str:
             "validation", is_retryable=False, attempted=attempted,
             description="document_metadata_url must not contain userinfo (username/password).",
         )
-    if parts.port is not None:
+    # .port is a lazily-validated property — an out-of-range or malformed
+    # port (e.g. ':99999999') raises ValueError on access, not on urlsplit()
+    # itself. Must not let that escape as a raw, unhandled exception.
+    try:
+        has_port = parts.port is not None
+    except ValueError:
+        raise_tool_error(
+            "validation", is_retryable=False, attempted=attempted,
+            description="document_metadata_url has a malformed port.",
+        )
+    if has_port:
         raise_tool_error(
             "validation", is_retryable=False, attempted=attempted,
             description=f"document_metadata_url must not specify a port — got {parts.port}.",
@@ -126,12 +136,28 @@ def _parse_document_id_from_metadata_url(url: str, *, attempted: str) -> str:
             description=f"document_metadata_url path must be exactly /document/{{id}} — got {path!r}.",
         )
     document_id = path[len(_DOCUMENT_METADATA_PATH_RE_PREFIX):]
-    if not document_id or "/" in document_id or not document_id.replace("-", "").replace("_", "").isalnum():
+    _validate_document_id(document_id, attempted=attempted)
+    return document_id
+
+
+def _validate_document_id(document_id: str, *, attempted: str) -> None:
+    """The same charset check applied whether document_id arrives via a
+    validated document_metadata_url (above) or directly as a
+    company-document://{document_id} resource read, which bypasses the
+    tool's URL validation entirely — a raw resource read needs its own,
+    independent check before document_id is used to build a request URL.
+    A real CH document ID is URL-safe-base64-shaped (observed live); '/'
+    or '..' can't pass the alnum-after-stripping-'-'/'_' check below, so
+    this also rules out path traversal.
+    """
+    if not document_id or not document_id.replace("-", "").replace("_", "").isalnum():
         raise_tool_error(
             "validation", is_retryable=False, attempted=attempted,
-            description=f"document_metadata_url path must be exactly /document/{{id}} — got {path!r}.",
+            description=(
+                f"document_id must be a non-empty CH document ID (letters, digits, "
+                f"'-' and '_' only) — got {document_id!r}."
+            ),
         )
-    return document_id
 
 
 def _document_metadata_url(document_id: str) -> str:
@@ -252,8 +278,33 @@ async def _fetch_document_content_bytes(
 
     # Fresh client, no auth, no headers carried over from the CH request —
     # CH_API_KEY is never attached to this or any redirect target.
+    #
+    # Deliberately NOT _request_with_retry/raise_http_tool_error for this
+    # leg: that helper interpolates the failing request's full URL into the
+    # error description (see mcpfleet_obs.errors.raise_http_tool_error),
+    # and this URL is the pre-signed S3 link carrying X-Amz-Credential /
+    # X-Amz-Signature / X-Amz-Security-Token query parameters. Those must
+    # never reach a Fleet error payload (model-visible), a log line, or
+    # anywhere else — so `location` and any exception's message/repr
+    # (which may itself embed the URL, e.g. httpx's ConnectTimeout str())
+    # are never interpolated into anything raised or logged below.
     async with httpx.AsyncClient(timeout=30.0) as anon_client:
-        content_resp = await _request_with_retry(anon_client, "GET", location)
+        try:
+            content_resp = await anon_client.get(location)
+        except httpx.HTTPError:
+            raise_tool_error(
+                "transient", is_retryable=True, attempted=attempted,
+                description="Failed to fetch the signed document content — retry may help.",
+            )
+
+    if not (200 <= content_resp.status_code < 300):
+        raise_tool_error(
+            "transient", is_retryable=True, attempted=attempted,
+            description=(
+                f"Signed document URL returned status {content_resp.status_code} — "
+                f"refusing to serve under false provenance."
+            ),
+        )
 
     actual_mime = _normalise_mime_type(content_resp.headers.get("content-type"))
     if actual_mime != mime_type:
@@ -414,12 +465,16 @@ def register_resources(mcp: FastMCP) -> None:
             "choices) when it has more — normally already present in the URI when "
             "reached via company_filing_document's resource_link."
         ),
-        mime_type="application/pdf",
+        mime_type="application/octet-stream",
     )
     async def company_document_resource(
         document_id: str, mime_type: str | None = None
     ) -> list[ResourceContent]:
         attempted = f"company-document://{document_id}"
+        # A resource read bypasses company_filing_document's URL validation
+        # entirely — document_id needs its own check before it's used to
+        # build a request URL, same as the tool's path.
+        _validate_document_id(document_id, attempted=attempted)
         meta = await _fetch_document_metadata(document_id)
         resources = meta.get("resources") or {}
         selected_mime = _resolve_mime_type(resources, mime_type, attempted=attempted)

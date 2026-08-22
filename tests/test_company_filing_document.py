@@ -118,6 +118,67 @@ def test_accepts_valid_metadata_url_and_extracts_id():
     assert document_id == "EV-72TL_abc-123"
 
 
+def test_malformed_port_is_structured_validation_not_a_raw_exception():
+    """urlsplit() itself never raises for a bad port — its .port property
+    is lazily validated and raises ValueError on access (confirmed: an
+    out-of-range port like :99999999 raises 'Port out of range 0-65535').
+    That must surface as our Fleet validation error, not an unhandled
+    Python exception."""
+    bad_url = "https://document-api.company-information.service.gov.uk:99999999/document/abc"
+
+    with pytest.raises(ToolError) as exc_info:
+        docs._parse_document_id_from_metadata_url(bad_url, attempted="test")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+    assert payload.error_category == "validation"
+    assert payload.is_retryable is False
+
+
+# ---------------------------------------------------------------------------
+# document_id validation — must apply consistently whether it arrives via a
+# validated document_metadata_url or directly through a resource read
+# ---------------------------------------------------------------------------
+
+
+def test_validate_document_id_accepts_url_safe_charset():
+    docs._validate_document_id("EV-72TL_abc-123", attempted="test")  # does not raise
+
+
+@pytest.mark.parametrize("bad_id", ["", "../../etc/passwd", "abc/def", "abc?x=1", "abc#frag", "abc def"])
+def test_validate_document_id_rejects_bad_charset(bad_id):
+    with pytest.raises(ToolError) as exc_info:
+        docs._validate_document_id(bad_id, attempted="test")
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload.error_category == "validation"
+    assert payload.is_retryable is False
+
+
+@pytest.mark.asyncio
+async def test_direct_resource_read_rejects_malformed_document_id_before_any_request(monkeypatch):
+    """A company-document:// read bypasses company_filing_document's URL
+    validation entirely — document_id needs its own independent check
+    before it's used to build a request URL, confirmed here via a
+    request-count assertion (same discipline as the tool's URL check)."""
+
+    request_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(docs, "companies_house_client", _mock_ch_client_factory(handler))
+
+    async with Client(mcp) as c:
+        with pytest.raises(McpError) as exc_info:
+            await c.read_resource("company-document://abc%2F..%2F..%2Fetc")
+
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload.error_category == "validation"
+    assert request_count == 0
+
+
 @pytest.mark.asyncio
 async def test_non_ch_host_rejected_before_any_authenticated_request(monkeypatch):
     """The credential-safety invariant: a hostile document_metadata_url must
@@ -370,6 +431,75 @@ async def test_redirect_to_non_https_is_rejected(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Signed-URL secrecy: a failing S3 fetch must never expose the pre-signed
+# URL (or its X-Amz-* query values) anywhere model-visible.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_s3_error_response_does_not_expose_signed_url(monkeypatch):
+    """An expired/invalid signed URL (403 from S3) is the realistic failure
+    case — content-type/length mismatch handling covers this too, but the
+    error must never contain the URL itself, only a generic message."""
+
+    secret_url = "https://s3.eu-west-2.amazonaws.com/bucket/docs/x/pdf?X-Amz-Signature=SUPERSECRETVALUE&X-Amz-Credential=AKIA123"
+
+    def ch_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": secret_url})
+
+    def anon_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, content=b"<Error>AccessDenied</Error>")
+
+    monkeypatch.setattr(docs, "companies_house_client", _mock_ch_client_factory(ch_handler))
+    _mock_anon_client_factory(monkeypatch, anon_handler)
+
+    with pytest.raises(ToolError) as exc_info:
+        await docs._fetch_document_content_bytes("abc123", "application/pdf", 1)
+
+    message = str(exc_info.value)
+    payload = parse_error_payload(message)
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+    assert "X-Amz" not in message
+    assert "SUPERSECRETVALUE" not in message
+    assert "AKIA123" not in message
+    assert secret_url not in message
+    assert "s3.eu-west-2.amazonaws.com" not in message
+
+
+@pytest.mark.asyncio
+async def test_s3_network_error_does_not_expose_signed_url(monkeypatch):
+    """A network-level failure (not an HTTP status) reaching the signed URL
+    — the exception's own str()/repr() can embed the request URL (httpx
+    does this for e.g. ConnectTimeout), so the handler must never
+    interpolate the caught exception into the raised error either."""
+
+    secret_url = "https://s3.eu-west-2.amazonaws.com/bucket/docs/x/pdf?X-Amz-Signature=SUPERSECRETVALUE&X-Amz-Credential=AKIA123"
+
+    def ch_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": secret_url})
+
+    def anon_handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    monkeypatch.setattr(docs, "companies_house_client", _mock_ch_client_factory(ch_handler))
+    _mock_anon_client_factory(monkeypatch, anon_handler)
+
+    with pytest.raises(ToolError) as exc_info:
+        await docs._fetch_document_content_bytes("abc123", "application/pdf", 1)
+
+    message = str(exc_info.value)
+    payload = parse_error_payload(message)
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+    assert "X-Amz" not in message
+    assert "SUPERSECRETVALUE" not in message
+    assert "AKIA123" not in message
+    assert secret_url not in message
+    assert "s3.eu-west-2.amazonaws.com" not in message
+
+
+# ---------------------------------------------------------------------------
 # Provenance verification: content-type / content-length mismatch
 # ---------------------------------------------------------------------------
 
@@ -488,3 +618,16 @@ async def test_tool_via_mcp_client_returns_resource_link_content(monkeypatch, mc
     assert result.structured_content["mime_type"] == "application/pdf"
     types = {getattr(b, "type", None) for b in result.content}
     assert "resource_link" in types
+
+
+@pytest.mark.asyncio
+async def test_resource_template_does_not_declare_a_fixed_pdf_mime_type(mcp_client):
+    """The declared template MIME is advisory listing metadata only — the
+    actual served type is always resolved dynamically per-document (see
+    ResourceContent(..., mime_type=selected_mime) in the resource body).
+    It must not bake in an application/pdf-only assumption, since
+    `resources` is upstream's own open dict."""
+
+    templates = await mcp_client.list_resource_templates()
+    doc_template = next(t for t in templates if t.name == "company_filing_document_content")
+    assert doc_template.mimeType != "application/pdf"
