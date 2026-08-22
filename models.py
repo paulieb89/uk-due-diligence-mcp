@@ -150,11 +150,12 @@ class CompanyProfile(BaseModel):
         default_factory=dict,
         description="Registered office address as returned by Companies House.",
     )
-    has_charges: bool = Field(
-        False,
+    has_charges: bool | None = Field(
+        None,
         description=(
             "True if the company has outstanding registered charges (secured debt), "
-            "derived from the /charges endpoint. A due diligence signal."
+            "False if the charges endpoint was checked completely and none are outstanding, "
+            "or null if the charges check could not be completed."
         ),
     )
     accounts: CompanyAccountsSummary = Field(
@@ -264,6 +265,10 @@ class CompanyPSCEntry(BaseModel):
     country_of_residence: str | None = Field(
         None,
         description="Declared country of residence for individual PSCs.",
+    )
+    date_of_birth: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Partial date of birth (month/year) for individual PSCs as returned by CH.",
     )
     natures_of_control: list[str] = Field(
         default_factory=list,
@@ -698,8 +703,8 @@ class GazetteNotice(BaseModel):
     notice_code: str | None = Field(
         None,
         description=(
-            "Gazette notice code (e.g. '2443' winding-up order, '2448' "
-            "administration order)."
+            "Gazette notice code (e.g. '2450' petition to wind up a company, "
+            "'2452' winding-up order for a company)."
         ),
     )
     notice_type: str | None = Field(
@@ -710,8 +715,8 @@ class GazetteNotice(BaseModel):
         0,
         description=(
             "Internal severity score 0-10. Higher = more serious (10 = "
-            "Winding-Up Order, 9 = Administration Order / Receiver, 0 = "
-            "unclassified)."
+            "winding-up order, 9 = administration/receiver/liquidator appointment, "
+            "0 = informational or unclassified)."
         ),
     )
     date: str | None = Field(

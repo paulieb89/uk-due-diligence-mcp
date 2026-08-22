@@ -1,27 +1,9 @@
 """
-The Gazette linked-data API tool (1 tool) + notice resource.
+The Gazette corporate-insolvency tools and linked-data notice resource.
 
-The Gazette's API is unauthenticated and uses an Atom-style JSON feed.
-Corporate insolvency notice codes span the 2440-2460 range:
-
-  2441 -- Winding-Up Petition
-  2442 -- Dismissal of Winding-Up Petition
-  2443 -- Winding-Up Order
-  2444 -- Stay of Winding-Up Order
-  2445 -- Appointment of Provisional Liquidator
-  2446 -- Notice to Creditors
-  2447 -- Notice to Contributories
-  2448 -- Administration Order
-  2449 -- Appointment of Administrative Receiver
-  2450 -- Moratorium
-  2452 -- Appointment of Liquidator
-  2455 -- Notice of Voluntary Winding-Up Resolution
-  2456 -- Creditors' Voluntary Liquidation
-  2460 -- Striking-Off Notice
-
-The search feed returns JSON with a top-level `entry` array (not JSON-LD @graph).
-Feed endpoint: /data.json?noticecode=XXXX&text=NAME&start-date=YYYY-MM-DD&end-date=YYYY-MM-DD
-Per-notice endpoint: https://www.thegazette.co.uk/notice/{id}/data.json?view=linked-data
+Notice labels are keyed to The Gazette's authoritative current notice-code
+register. Search results preserve the notice code and a source-faithful label;
+full legal semantics remain available from the per-notice linked-data endpoint.
 """
 
 from __future__ import annotations
@@ -41,54 +23,72 @@ from models import GazetteInsolvencyResult, GazetteNotice
 # Notice code taxonomy
 # ---------------------------------------------------------------------------
 
-# Corporate insolvency codes returned by the Gazette /insolvency/notice endpoint.
-# Includes 2431-2433 (legacy company codes) and 2440-2460 range.
+# Corporate insolvency codes from The Gazette's authoritative notice-code register.
 # Personal insolvency codes (2500+) are excluded.
-ALL_CORPORATE_INSOLVENCY_CODES = {
-    "2431", "2432", "2433",  # older corporate winding-up / liquidator codes
-    "2441", "2442", "2443", "2444", "2445", "2446",
-    "2447", "2448", "2449", "2450", "2452", "2455", "2456", "2460",
-}
-
 NOTICE_LABELS: dict[str, str] = {
-    "2431": "Resolutions for Winding-Up",
-    "2432": "Appointment of Liquidators",
-    "2433": "Notice to Creditors / Contributories",
-    "2441": "Winding-Up Petition",
-    "2442": "Dismissal of Winding-Up Petition",
-    "2443": "Winding-Up Order",
-    "2444": "Stay of Winding-Up Order",
-    "2445": "Appointment of Provisional Liquidator",
-    "2446": "Notice to Creditors",
-    "2447": "Notice to Contributories",
-    "2448": "Administration Order",
-    "2449": "Appointment of Administrative Receiver",
-    "2450": "Moratorium",
-    "2452": "Appointment of Liquidator",
-    "2455": "Notice of Voluntary Winding-Up Resolution",
-    "2456": "Creditors' Voluntary Liquidation",
-    "2460": "Striking-Off Notice",
+    "2401": "Moratorium – coming into force",
+    "2402": "Moratorium – coming to an end",
+    "2403": "Re-use of a prohibited name",
+    "2404": "Cross-border insolvencies",
+    "2405": "Overseas territories and dependencies",
+    "2406": "Notice of intended dividend",
+    "2407": "Notice of dividend",
+    "2408": "Other corporate insolvency notices",
+    "2409": "Qualifying decision procedure",
+    "2410": "Appointment of administrators",
+    "2411": "Administration orders",
+    "2412": "Meetings of creditors (administration)",
+    "2413": "Notices to members (administration)",
+    "2414": "Deemed consent (administration)",
+    "2421": "Appointment of administrative receivers",
+    "2422": "Meetings of creditors (receivership)",
+    "2423": "Appointment of receivers",
+    "2424": "Deemed consent (administrative receivership)",
+    "2431": "Resolution for winding up (members' voluntary)",
+    "2432": "Appointment of liquidators (members' voluntary)",
+    "2433": "Notices to creditors (members' voluntary)",
+    "2434": "Annual liquidation meetings (members' voluntary)",
+    "2435": "Final meetings (members' voluntary)",
+    "2441": "Resolution for winding up (creditors' voluntary)",
+    "2442": "Meetings of creditors (creditors' voluntary)",
+    "2443": "Appointment of liquidators (creditors' voluntary)",
+    "2444": "Annual liquidation meetings (creditors' voluntary)",
+    "2445": "Final meetings (creditors' voluntary)",
+    "2446": "Notice to creditors (creditors' voluntary)",
+    "2447": "Deemed consent (creditors' voluntary)",
+    "2450": "Petitions to wind up (companies)",
+    "2451": "Petitions to wind up (partnerships)",
+    "2452": "Winding up order (companies)",
+    "2453": "Winding up order (partnerships)",
+    "2454": "Appointment of liquidators (court winding up)",
+    "2455": "Meetings of creditors (court winding up)",
+    "2456": "Notice of intended dividend (court winding up)",
+    "2457": "Notice of dividend (court winding up)",
+    "2458": "Final meetings (court winding up)",
+    "2459": "Release of liquidator",
+    "2460": "Notice to creditors (court winding up)",
+    "2461": "Dismissal of winding up petition",
+    "2462": "Service of petition",
+    "2463": "Annual meeting",
+    "2464": "Public examinations",
+    "2465": "Deemed consent (court winding up)",
 }
 
-# Severity ordering -- higher = more serious
+ALL_CORPORATE_INSOLVENCY_CODES = set(NOTICE_LABELS)
+
+# Internal DD severity ordering. This is deliberately separate from the
+# authoritative Gazette label mapping above: severity is a BOUCH/MCP judgement,
+# while notice labels are source facts.
 SEVERITY: dict[str, int] = {
-    "2443": 10,  # Winding-Up Order
-    "2448": 9,   # Administration Order
-    "2449": 9,   # Administrative Receiver
-    "2456": 8,   # Creditors' Voluntary Liquidation
-    "2445": 7,   # Provisional Liquidator
-    "2452": 7,   # Liquidator appointed
-    "2432": 7,   # Appointment of Liquidators (legacy)
-    "2431": 6,   # Resolutions for Winding-Up (legacy)
-    "2441": 6,   # Petition (not yet order)
-    "2460": 5,   # Striking-Off
-    "2455": 4,   # Voluntary Winding-Up Resolution
-    "2450": 3,   # Moratorium
-    "2446": 2,
-    "2447": 2,
-    "2433": 2,
-    "2442": 1,
-    "2444": 1,
+    "2452": 10, "2453": 10,
+    "2410": 9, "2411": 9, "2421": 9, "2423": 9, "2454": 9,
+    "2441": 8, "2443": 8,
+    "2450": 6, "2451": 6, "2462": 6,
+    "2401": 4, "2402": 2,
+    "2446": 3, "2455": 3, "2460": 3,
+    "2442": 2, "2447": 2, "2464": 2, "2465": 2,
+    "2431": 1, "2432": 1, "2433": 1,
+    "2461": 0,
 }
 
 
@@ -189,18 +189,16 @@ def register_tools(mcp: FastMCP) -> None:
         name: Annotated[str | None, Field(description="Company or individual name to search for in Gazette insolvency notices", min_length=2, max_length=200)] = None,
         query: Annotated[str | None, Field(description="Alias for name.", min_length=2, max_length=200)] = None,
         entity_name: Annotated[str | None, Field(description="Deprecated alias for name.", min_length=2, max_length=200)] = None,
-        notice_type: Annotated[str | None, Field(description="Filter by notice code (e.g. '2441' winding-up petition, '2443' winding-up order, '2448' administration order, '2460' striking-off). Omit to search all.")] = None,
+        notice_type: Annotated[str | None, Field(description="Filter by Gazette notice code (e.g. '2450' petition to wind up a company, '2452' winding-up order, '2410' appointment of administrators). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
         max_notices: Annotated[int, Field(description="Cap on notices returned, applied after severity/date sort. Default 20. The Gazette insolvency feed returns up to 100 results per search — raise to 100 to see the full set.", ge=1, le=100)] = 20,
     ) -> GazetteInsolvencyResult:
         """Search The Gazette's insolvency notice index by entity name.
 
-        Searches the Gazette's insolvency endpoint which covers corporate
-        notice codes: winding-up orders (2443), administration orders (2448),
-        liquidator appointments (2452), striking-off notices (2460), and more.
-        Results are sorted by severity — winding-up orders and administration
-        orders appear first.
+        Searches The Gazette's corporate-insolvency notice index using the
+        authoritative Gazette notice-code taxonomy. Results are sorted by an
+        internal DD severity score; the notice label itself remains a source fact.
 
         Each result includes a notice_numeric_id. Read the full legal wording
         via the notice://{notice_numeric_id} resource.
