@@ -17,7 +17,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+  # Scoped to uk-due-diligence-mcp-staging only — deliberately separate from
+  # FLY_API_TOKEN (which release.yml uses for prod) so staging deploys can't
+  # be authorized by, or accidentally rotate, the prod deploy credential.
+  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_STAGING }}
 
 jobs:
   verify:
