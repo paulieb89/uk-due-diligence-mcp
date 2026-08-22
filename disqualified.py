@@ -12,13 +12,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-import httpx
 from pydantic import Field
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from http_client import _request_with_retry, companies_house_client
-from mcpfleet_obs import raise_http_tool_error, raise_tool_error
+from mcpfleet_obs import parse_error_payload, raise_http_tool_error, raise_tool_error
 from models import (
     DisqualificationOrder,
     DisqualifiedProfile,
@@ -164,8 +163,14 @@ async def _fetch_disqualified_profile(officer_id: str) -> DisqualifiedProfile:
                 data = resp.json()
                 officer_kind = kind
                 break
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 404:
+        except ToolError as exc:
+            # _request_with_retry already converts a 404 into a structured
+            # ToolError (not the raw httpx.HTTPStatusError this used to
+            # catch, which _request_with_retry never lets escape) — only
+            # fall through to the next endpoint on a genuine not-found;
+            # anything else (auth, transient, etc.) should still surface.
+            payload = parse_error_payload(str(exc))
+            if payload is not None and payload.error_category == "not_found":
                 continue
             raise
 
