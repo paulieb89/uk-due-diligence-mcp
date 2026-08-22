@@ -577,6 +577,107 @@ class CompanyChargesResult(BaseModel):
     )
 
 
+class CompanyFiling(BaseModel):
+    """A single Companies House filing-history entry.
+
+    resolutions/associated_filings/annotations are nested filing-like
+    dicts (their own category/type/description/description_values) but
+    carry no transaction_id or links of their own — not independently
+    document-retrievable — so they are passed through raw rather than
+    modeled. subcategory is usually a string but has been observed as a
+    list of strings upstream (e.g. ["compulsory", "court-order"]);
+    preserved as whichever shape upstream sent, not normalized.
+    """
+
+    model_config = BASE_CFG
+
+    transaction_id: str = Field(
+        ..., description="Companies House filing transaction ID. Path segment in links.self."
+    )
+    type: str = Field(
+        ..., description="CH filing form code (e.g. 'AA', 'CS01', 'MR04', 'CH01', 'RESOLUTIONS')."
+    )
+    date: str | None = Field(None, description="Filing/delivery date (ISO YYYY-MM-DD).")
+    action_date: str | None = Field(
+        None,
+        description=(
+            "Effective date of the underlying event, where distinct from the "
+            "filing date (e.g. a change filed weeks after it took effect)."
+        ),
+    )
+    category: str | None = Field(
+        None,
+        description="Filing category (e.g. 'accounts', 'mortgage', 'officers', 'insolvency', 'resolution').",
+    )
+    subcategory: str | list[str] | None = Field(
+        None,
+        description="Filing subcategory as returned upstream — usually a string, occasionally a list of strings.",
+    )
+    description: str | None = Field(
+        None, description="Filing description slug as returned by CH (e.g. 'incorporation-company'), not prose."
+    )
+    description_values: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Free-form values referenced by the description slug. Keys vary entirely by filing type.",
+    )
+    pages: int | None = Field(
+        None, description="Page count of the underlying filed document (not filing-history pagination)."
+    )
+    paper_filed: bool | None = Field(None, description="True if filed on paper rather than electronically.")
+    barcode: str | None = Field(None, description="CH barcode for this filing. Absent on many older filings.")
+    resolutions: list[dict[str, Any]] = Field(
+        default_factory=list, description="Nested resolution filings, where this entry is a RESOLUTIONS bundle."
+    )
+    associated_filings: list[dict[str, Any]] = Field(
+        default_factory=list, description="Other filings bundled with this one (e.g. a same-day statement of capital)."
+    )
+    annotations: list[dict[str, Any]] = Field(
+        default_factory=list, description="CH clarification notes attached to this filing after the fact."
+    )
+    links: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Upstream relational links. links.self is always present; "
+            "links.document_metadata (Document API URL) is present on most "
+            "but not all filings — absent on some pre-2008 filings."
+        ),
+    )
+
+
+class CompanyFilingHistoryResult(BaseModel):
+    """One page of Companies House filing-history results for a company.
+
+    Not an auto-fetch-all collection like officers/PSC/charges — a
+    company's filing history is unbounded in practice (a long-lived PLC
+    can carry thousands of filings, multiple megabytes serialized), so
+    pagination is exposed to the caller rather than hidden. Re-call with
+    start_index=start_index+returned while has_more is true.
+    """
+
+    model_config = BASE_CFG
+
+    company_number: str = Field(..., description="Companies House company number.")
+    category: str | None = Field(
+        None, description="The category filter applied to this query, or null if unfiltered."
+    )
+    filing_history_status: str | None = Field(
+        None, description="Upstream filing-history status (e.g. 'filing-history-available')."
+    )
+    total_count: int = Field(..., description="Total filings matching this query (across all pages).")
+    start_index: int = Field(..., description="Pagination offset used for this page.")
+    items_per_page: int = Field(..., description="Page size actually used (CH caps at 100 regardless of a higher request).")
+    returned: int = Field(..., description="Filings returned on this page.")
+    has_more: bool = Field(..., description="True if start_index + returned < total_count.")
+    note: str | None = Field(
+        None,
+        description=(
+            "Advisory note, e.g. suggesting a category filter when total_count is "
+            "large and no category was applied. Informational only — never a truncation."
+        ),
+    )
+    filings: list[CompanyFiling] = Field(default_factory=list, description="Filings on this page.")
+
+
 # =============================================================================
 # Disqualified directors
 # =============================================================================

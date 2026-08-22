@@ -2,7 +2,7 @@
 server.py — uk_due_diligence_mcp
 
 UK Due Diligence MCP server.
-17 tools + 8 resource templates across six official-source registers
+18 tools + 9 resource templates across six official-source registers
 (five public registers plus consolidated sanctions lists).
 
 Data sources:
@@ -15,9 +15,9 @@ Data sources:
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (17 — all clients including ChatGPT):
+Tools (18 — all clients including ChatGPT):
     company_search, company_profile, company_officers, company_psc,
-        officer_appointments, company_charges
+        officer_appointments, company_charges, company_filing_history
     disqualified_search, disqualified_profile
     charity_search, charity_profile
     gazette_insolvency, gazette_notice
@@ -25,11 +25,12 @@ Tools (17 — all clients including ChatGPT):
     sanctions_screen
     search, fetch
 
-Resources (8 noun/identifier — protocol-compliant clients only):
+Resources (9 noun/identifier — protocol-compliant clients only):
     company://{company_number}/profile
     company://{company_number}/officers
     company://{company_number}/psc
     company://{company_number}/charges
+    company://{company_number}/filing-history
     officer://{officer_id}/appointments
     disqualification://{officer_id}
     charity://{charity_number}/profile
@@ -82,7 +83,11 @@ mcp = FastMCP(
         "officer_appointments to discover that person's full company history, including "
         "dissolved or insolvent companies not named anywhere else. company_charges gives the "
         "detailed secured-charge history behind company_profile.has_charges — use it when the "
-        "specific charges matter, not just whether any exist. "
+        "specific charges matter, not just whether any exist. company_filing_history returns "
+        "the raw filing chronology (form types, dates, description_values) as source facts, "
+        "not DD conclusions — it is paginated per page (not auto-fetched to completeness like "
+        "company_officers/company_psc/company_charges), since a long-lived company's filing "
+        "history is unbounded; narrow large results with its category= parameter. "
         "Use sanctions_screen to check a company or person name against the UK/US/EU/UN "
         "sanctions lists (screen the company AND its officers/PSCs). "
         "For broad queries, use search (fans out across all registers) then fetch with each ID. "
