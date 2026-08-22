@@ -2,7 +2,8 @@
 server.py — uk_due_diligence_mcp
 
 UK Due Diligence MCP server.
-Six tools + six resource templates across five public registers.
+17 tools + 8 resource templates across six official-source registers
+(five public registers plus consolidated sanctions lists).
 
 Data sources:
   - Companies House REST API (CH_API_KEY)
@@ -14,8 +15,9 @@ Data sources:
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (14 — all clients including ChatGPT):
-    company_search, company_profile, company_officers, company_psc
+Tools (17 — all clients including ChatGPT):
+    company_search, company_profile, company_officers, company_psc,
+        officer_appointments, company_charges
     disqualified_search, disqualified_profile
     charity_search, charity_profile
     gazette_insolvency, gazette_notice
@@ -23,10 +25,12 @@ Tools (14 — all clients including ChatGPT):
     sanctions_screen
     search, fetch
 
-Resources (6 noun/identifier — protocol-compliant clients only):
+Resources (8 noun/identifier — protocol-compliant clients only):
     company://{company_number}/profile
     company://{company_number}/officers
     company://{company_number}/psc
+    company://{company_number}/charges
+    officer://{officer_id}/appointments
     disqualification://{officer_id}
     charity://{charity_number}/profile
     notice://{notice_id}

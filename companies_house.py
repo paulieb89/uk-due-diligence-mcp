@@ -172,6 +172,8 @@ async def _fetch_company_officers(
     company_number: str, *, include_resigned: bool = False
 ) -> CompanyOfficersResult:
     raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    attempted = f"GET /company/{company_number}/officers"
     async with companies_house_client() as client:
         start_index = 0
         page_size = 100
@@ -183,12 +185,43 @@ async def _fetch_company_officers(
                 params={"items_per_page": page_size, "start_index": start_index},
             )
             data = resp.json()
+            if not top:
+                top = data
             page_items = data.get("items", []) or []
+            total_results = int(data.get("total_results", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_results:
+                # Upstream said there should be more, but this page came
+                # back empty. Not "must be the end" — an incomplete
+                # collection returned silently is worse than no result.
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"Officers pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_results={total_results} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
             raw_items.extend(page_items)
-            total_results = int(data.get("total_results", len(raw_items)) or 0)
             start_index += len(page_items)
-            if not page_items or start_index >= total_results or len(page_items) < page_size:
+            if start_index >= total_results:
                 break
+
+    result_total = int(top.get("total_results", len(raw_items)) or 0)
+    if len(raw_items) != result_total:
+        # Post-loop invariant, not just trust in the loop's own logic.
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Officers collection incomplete or inconsistent: received "
+                f"{len(raw_items)} officers but upstream reported "
+                f"total_results={result_total}."
+            ),
+        )
 
     if not include_resigned:
         raw_items = [o for o in raw_items if not o.get("resigned_on")]
@@ -219,15 +252,53 @@ async def _fetch_company_officers(
 
 
 async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
+    raw_items: list[dict[str, Any]] = []
+    top: dict[str, Any] = {}
+    attempted = f"GET /company/{company_number}/persons-with-significant-control"
     async with companies_house_client() as client:
-        resp = await _request_with_retry(
-            client, "GET",
-            f"/company/{company_number}/persons-with-significant-control",
-        )
-        data = resp.json()
+        start_index = 0
+        page_size = 100
+        while True:
+            resp = await _request_with_retry(
+                client,
+                "GET",
+                f"/company/{company_number}/persons-with-significant-control",
+                params={"items_per_page": page_size, "start_index": start_index},
+            )
+            data = resp.json()
+            if not top:
+                top = data
+            page_items = data.get("items", []) or []
+            total_results = int(data.get("total_results", len(raw_items) + len(page_items)) or 0)
+            if not page_items and start_index < total_results:
+                raise_tool_error(
+                    "transient",
+                    is_retryable=True,
+                    attempted=attempted,
+                    description=(
+                        f"PSC pagination returned an empty page at "
+                        f"start_index={start_index} before reaching "
+                        f"total_results={total_results} — incomplete collection, "
+                        f"not a valid result."
+                    ),
+                )
+            raw_items.extend(page_items)
+            start_index += len(page_items)
+            if start_index >= total_results:
+                break
 
-    raw_items = data.get("items", []) or []
-    total = int(data.get("total_results", len(raw_items)) or 0)
+    total = int(top.get("total_results", len(raw_items)) or 0)
+    if len(raw_items) != total:
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"PSC collection incomplete or inconsistent: received "
+                f"{len(raw_items)} PSC entries but upstream reported "
+                f"total_results={total}."
+            ),
+        )
 
     psc_entries: list[CompanyPSCEntry] = []
     overseas_flag = 0
@@ -669,8 +740,9 @@ def register_resources(mcp: FastMCP) -> None:
         "company://{company_number}/officers",
         name="company_officers",
         description=(
-            "Active officers for a Companies House company number. "
-            "Flags directors with >=10 other appointments (nominee/phoenix risk signal)."
+            "Active officers for a Companies House company number. Each officer "
+            "carries an officer_id — pass it to officer_appointments to discover "
+            "that person's full company history."
         ),
         mime_type="application/json",
     )
