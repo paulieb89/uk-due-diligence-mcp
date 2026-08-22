@@ -66,6 +66,12 @@ misleading without the status alongside it.
   `company_officers` (where "who currently runs this company" is the
   default question), the entire value of this tool is historical discovery.
   It always returns the full history.
+- **No interpretation of upstream appointment-state as business health.**
+  `company_status`, `active_count`, `resigned_count`, and `inactive_count`
+  are passed through as raw upstream facts, exactly as `gazette.py` keeps
+  source-fact notice labels separate from the internal `SEVERITY` score. No
+  derived field (e.g. an `is_distressed` or risk boolean) is added in this
+  PR — that judgment stays with the caller, not the server.
 
 ## Design
 
@@ -114,6 +120,11 @@ class OfficerAppointmentsResult(BaseModel):
 `active_count`, `resigned_count`, `inactive_count` are passed through as
 distinct fields exactly as Companies House returns them — not collapsed.
 
+`date_of_birth` may be null/absent upstream (e.g. corporate officers, or
+individuals who withhold it) — defaults to `{}`, following the same
+`raw.get("date_of_birth") or {}` pattern already used for
+`CompanyOfficer`/`CompanyPSCEntry`. Never assume the key is present.
+
 `CompanyOfficer` (existing model) gains:
 
 ```python
@@ -156,3 +167,16 @@ upstream endpoint.
   before merge, reproducing the TAS -> MEL discovery chain end-to-end
   against live Companies House data (already spiked once during design;
   will be re-run cleanly against the finished implementation).
+
+### Acceptance criteria
+
+- Starting only from TAS Engineering (06333469), chaining `company_officers`
+  -> `officer_appointments` surfaces MEL Precision (09118548) with
+  `company_status: "liquidation"`, without MEL being named anywhere in the
+  input.
+- **Pagination completeness**: when all pages succeed, `len(appointments)`
+  on the returned result equals upstream `total_results` exactly — no
+  page silently dropped, no off-by-one on the `start_index` loop boundary.
+- `date_of_birth` absent upstream does not raise — result field is `{}`.
+- `company_status`/`active_count`/`resigned_count`/`inactive_count` are
+  reported as upstream returns them, with no derived interpretation.
