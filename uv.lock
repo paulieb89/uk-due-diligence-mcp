@@ -1249,7 +1249,7 @@ wheels = [
 
 [[package]]
 name = "uk-due-diligence-mcp"
-version = "1.2.0"
+version = "1.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
