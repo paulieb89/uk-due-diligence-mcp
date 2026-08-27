@@ -44,7 +44,7 @@ Business Tools
 uk-companies-house, uk-due-diligence, sanctions-screening, disqualified-directors, land-registry, charity-commission, gazette-insolvency, psc, beneficial-owner, company-search, uk-business, compliance, mcp
 
 ## Documentation URL
-https://bouch.dev
+https://bouch.dev/products/uk-due-diligence-mcp
 
 ## Health Check URL
 https://uk-due-diligence-mcp.fly.dev/health
