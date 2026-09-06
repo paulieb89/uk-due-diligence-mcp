@@ -40,6 +40,11 @@ def main() -> int:
     if not DEPLOY.search(command):
         return 0
 
+    # Also to stderr: under an auto-approving permission mode the "ask" can be
+    # granted without ever showing the reason, and a warning nobody reads is not
+    # a warning. stderr puts it in the transcript either way.
+    print(f"\n[deploy warning]\n{REASON}\n", file=sys.stderr)
+
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
