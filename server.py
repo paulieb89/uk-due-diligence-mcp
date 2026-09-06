@@ -142,7 +142,15 @@ install(mcp, prefix="uk_due_diligence")
 # Register all tools
 # ---------------------------------------------------------------------------
 
-import companies_house, companies_house_documents, charity, disqualified, land_registry, gazette, hmrc_vat, sanctions, search_fetch
+import companies_house
+import companies_house_documents
+import charity
+import disqualified
+import land_registry
+import gazette
+import hmrc_vat
+import sanctions
+import search_fetch
 
 companies_house.register_tools(mcp)
 companies_house_documents.register_tools(mcp)

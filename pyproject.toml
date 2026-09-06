@@ -71,8 +71,25 @@ only-include = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.14.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Pinned to ruff's documented default rule set. Left implicit, the selection
+# tracks whatever the installed ruff considers default — 0.16 widened that to
+# include isort, pylint and flake8-bugbear, which rewrote 20 files on first
+# --fix. The hook must mean the same thing across ruff upgrades.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# server.py imports the domain modules after install(mcp, ...) so that
+# registration order reads top-to-bottom under the "Register all tools"
+# banner. The placement is deliberate, not an oversight.
+"server.py" = ["E402"]

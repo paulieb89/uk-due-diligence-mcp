@@ -15,7 +15,6 @@ Usage in matrix.py:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import time

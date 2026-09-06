@@ -10,7 +10,6 @@ Provides a single httpx.AsyncClient instance per data source with:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from typing import Any, Optional
 

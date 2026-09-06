@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import csv
-import io
 import os
 import re
 import sys

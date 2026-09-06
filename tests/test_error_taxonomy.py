@@ -38,7 +38,6 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
 import companies_house
-import disqualified
 import gazette
 import http_client
 from mcpfleet_obs import parse_error_payload
