@@ -237,3 +237,7 @@ bin-release/
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
+
+# Claude Code — per-machine session state. Committed config lives in
+# .claude/settings.json; anything machine-local belongs here.
+.claude/settings.local.json
