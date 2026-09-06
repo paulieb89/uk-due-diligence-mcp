@@ -3,6 +3,10 @@
     "uk-due-diligence": {
       "type": "http",
       "url": "https://uk-due-diligence-mcp.fly.dev/mcp"
+    },
+    "gofastmcp": {
+      "type": "http",
+      "url": "https://gofastmcp.com/mcp"
     }
   }
 }

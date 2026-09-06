@@ -1,6 +1,7 @@
 {
   "enabledMcpjsonServers": [
-    "uk-due-diligence"
+    "uk-due-diligence",
+    "gofastmcp"
   ],
   "hooks": {
     "PostToolUse": [
