@@ -1,5 +1,33 @@
 {
   "enabledMcpjsonServers": [
     "uk-due-diligence"
-  ]
+  ],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/check_invariants.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/post_edit_python.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .claude/hooks/pre_bash_deploy.py"
+          }
+        ]
+      }
+    ]
+  }
 }
