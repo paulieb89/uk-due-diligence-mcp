@@ -125,3 +125,54 @@ sees it, exit 0 always". Per §1 and §2 that is falsified in both halves: exit-
 stderr reaches nobody, and PostToolUse exit 2 *does* show stderr to the model
 even though the tool already ran. Its fix is mechanical — **exit 0 → exit 2 on
 the failure paths**. Nothing else about it needs to change.
+
+---
+
+## 6. Release gate: first fire, real environment
+
+**2026-09-07.** The `--expect <tag>` anchor in `release.yml` had been verified
+only locally; the `${{ github.event.release.tag_name }}` wiring had never run
+where it lives. Exercised deliberately.
+
+**Method — arrange the experiment so the thing under test prevents the damage.**
+Cut `v1.3.1-rc1` as a pre-release with `pyproject.toml` deliberately left at
+1.3.0, so the gate *must* reject it. This mattered: `release.yml` subscribes to
+`release: types: [published]`, which fires for pre-releases too, and the `pypi`
+environment has no protection rules — so a *passing* gate would have chained
+straight to a PyPI upload and a prod deploy. The rejection is what made the
+rehearsal safe, not caution.
+
+**Result — run 34164749257, job `Publish to PyPI`, failed at step 4:**
+
+```
+Run uv run --no-project --python 3.12 python .claude/hooks/check_invariants.py --standalone --expect "v1.3.1-rc1"
+
+Repo invariant violation:
+
+  - RELEASE TAG MISMATCH — tag 'v1.3.1-rc1' normalises to 1.3.1-rc1, but pyproject.toml declares 1.3.0.
+    The version triad is self-consistent and anchored to the wrong version. Bump the three files, or retag.
+
+Fix before continuing. These are enforced, not advisory.
+##[error]Process completed with exit code 2.
+```
+
+| step | outcome |
+|---|---|
+| 4. Repo invariants and release tag | **failure** |
+| 5. `uv build` | skipped |
+| 6. `pypa/gh-action-pypi-publish` | skipped |
+| job `Deploy to Fly` | **skipped** via `needs: publish` |
+
+**Proven where it matters:** the `tag_name` expression resolves and reaches the
+script — the tag appears verbatim in the message, which also distinguishes a real
+resolution from an empty expression, since an empty tag would fail too but say
+so differently; exit 2 propagates out through `uv run` to the runner; and a
+failed gate actually blocks publish *and* deploy rather than merely reporting.
+
+**Clean afterwards:** PyPI has no 1.3.1rc1 (latest remains 1.3.0), release and
+tag deleted, prod still `8dd311f (via release), matching v1.3.0`.
+
+**Residual, accepted:** this exercises the *reject* path. The accept path
+(`--expect v1.3.0` → exit 0) stays verified only locally and first runs in CI on
+the next real release. That is the right way round — "does it block" is the
+property worth proving.
