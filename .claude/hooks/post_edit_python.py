@@ -44,6 +44,14 @@ def main() -> int:
     if not str(file_path).endswith(".py"):
         return 0
 
+    # Contain to this repo. Keying on the extension alone ran *this* repo's ruff
+    # and full suite against any .py anywhere on the machine — editing a
+    # scratchpad script could block on an unrelated red test in here.
+    try:
+        Path(file_path).resolve().relative_to(ROOT)
+    except (OSError, ValueError):
+        return 0
+
     lint = _run(["uv", "run", "--no-sync", "ruff", "check", str(file_path)])
     if lint is None:
         print("ruff could not run — skipping lint/test gate.", file=sys.stderr)

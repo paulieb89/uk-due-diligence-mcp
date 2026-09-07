@@ -10,11 +10,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/check_invariants.py"
+            "command": "uv run --no-sync python .claude/hooks/check_invariants.py"
           },
           {
             "type": "command",
-            "command": "python3 .claude/hooks/post_edit_python.py"
+            "command": "uv run --no-sync python .claude/hooks/post_edit_python.py"
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/pre_bash_deploy.py"
+            "command": "uv run --no-sync python .claude/hooks/pre_bash_deploy.py"
           }
         ]
       }
