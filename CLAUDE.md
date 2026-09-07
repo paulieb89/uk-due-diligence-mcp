@@ -27,8 +27,14 @@ Bumping a version means editing **three** files or the registries drift (this ha
 happened — see `daaa9dc`, and again at v1.3.0):
 `pyproject.toml`, `server.py` (`smithery_server_card`), `server.json` (×2).
 
+The version triad is asserted mechanically — see Invariants below — and
+`release.yml` additionally checks it against the release tag, so neither a bump
+that misses a file nor a tag that outruns the files can reach PyPI.
+
 Run `scripts/check-deploy-drift.sh` to confirm what is actually running in prod
-was built by CI from a commit on `origin/main`.
+was built by CI from the **latest release tag**. Prod is release-gated, so main
+running ahead between releases is normal — the script reports that distance as
+information and still exits 0.
 
 ## Invariants
 
@@ -37,7 +43,16 @@ was built by CI from a commit on `origin/main`.
 - These three routes are external contracts (Smithery/Glama/Fly) — never drop:
   `/.well-known/mcp/server-card.json`, `/.well-known/glama.json`, `/health`.
 
-These are enforced by hooks in `.claude/settings.json`, not just documented here.
+These are enforced by `.claude/hooks/check_invariants.py`, not just documented
+here. It runs two ways: as a `PostToolUse` hook (wired in `.claude/settings.json`)
+after an agent edit, and with `--standalone` as a standing assertion in `/verify`,
+in `deploy-staging.yml` on every push to main, and in `release.yml` before the
+PyPI publish (there with `--expect <tag>`, which anchors the triad to the release
+tag — self-consistent files pinned to the wrong version is still drift). The hook path only sees `Write|Edit|MultiEdit`, so a `sed`, a vim
+edit or a merge bypasses it — the standalone runs are what cover the tree at rest.
+
+It fails **open**: anything it cannot parse is not an opinion, so a clean exit
+means "found no disagreement", not "checked everything".
 
 ## Verify
 

@@ -32,6 +32,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev
+
+      # Standing assertion of the four repo invariants. check_invariants.py is
+      # also a PostToolUse hook, but that path only sees agent edits made through
+      # Write|Edit|MultiEdit — a `sed -i`, a human in vim, or a merge commit all
+      # bypass it, so nothing checked the triad at rest until this step.
+      #
+      # No --expect here: only a release knows the tag. Push-to-main asserts
+      # internal consistency; release.yml adds the external anchor.
+      #
+      # Inherits the hook's deliberate fail-open posture: a pyproject.toml it
+      # cannot parse passes here and fails at `uv build` two steps later.
+      - name: Repo invariants
+        run: uv run --no-sync python .claude/hooks/check_invariants.py --standalone
+
       - run: uv run --no-sync pytest tests/ -q
       - run: uv build
 
