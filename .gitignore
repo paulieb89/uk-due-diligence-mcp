@@ -241,3 +241,4 @@ bin-release/
 # Claude Code — per-machine session state. Committed config lives in
 # .claude/settings.json; anything machine-local belongs here.
 .claude/settings.local.json
+dashboard.json
