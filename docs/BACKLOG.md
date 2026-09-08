@@ -18,7 +18,7 @@ that file is for measured claims about the runtime, this one is for reminders.
 ---
 
 - 2026-09-08: `actions/checkout@v4` + `astral-sh/setup-uv@v5` (both workflows) target Node 20, forced onto Node 24 — non-fatal today, bump before it is.
-- 2026-09-08: `/prime`'s Open-TODOs fallback is dead — `grep ... | head -8 || echo none` never fires, since `head` exits 0 even when grep matched nothing.
-- 2026-09-08: `/prime`'s "Open TODOs" label overclaims — it scans only `*.py` for case-sensitive `TODO`/`FIXME`, so a marker in any of the 22 tracked `.md`, or in `.sh`/`.yml`/`.toml`, is invisible; widen the scan or narrow the label.
+- ~~2026-09-08: `/prime`'s Open-TODOs fallback is dead — `grep ... | head -8 || echo none` never fires, since `head` exits 0 even when grep matched nothing.~~
+- ~~2026-09-08: `/prime`'s "Open TODOs" label overclaims — it scans only `*.py` for case-sensitive `TODO`/`FIXME`, so a marker in any of the 22 tracked `.md`, or in `.sh`/`.yml`/`.toml`, is invisible; widen the scan or narrow the label.~~
 - 2026-09-08: Decide if marker-hunting is grep's job or a VS Code Todo-Tree-style extension's — grep is text-only and cannot tell a real `# TODO` from the word in a docstring or a `KEY=xxx` placeholder (3 such false positives in `fly.toml`/`fly.staging.toml` today), whereas a comment-parsing extension can.
 - 2026-09-08: Whichever TODO convention wins, write it down — marker vocabulary and where it is scanned — in this repo's `CLAUDE.md` or the global one, since an unrecorded convention binds nobody and drifts silently.

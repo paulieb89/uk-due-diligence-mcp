@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(ls:*), Bash(grep:*), Bash(uv run:*), Read
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git grep:*), Bash(ls:*), Bash(grep:*), Bash(uv run:*), Read
 argument-hint: [focus-area]
 description: Load current repo state - git activity, work in flight, verification status
 ---
@@ -14,7 +14,7 @@ description: Load current repo state - git activity, work in flight, verificatio
 ## Work in flight
 - Repo plans/specs: !`find docs -maxdepth 3 -name "*.md" \( -path "*/plans/*" -o -path "*/specs/*" \) 2>/dev/null | xargs -r ls -t 2>/dev/null | head -5`
 - Backlog (top 3 live): !`grep -m 3 "^- [^~]" docs/BACKLOG.md 2>/dev/null || echo none`
-- Open TODOs: !`grep -rn "TODO\|FIXME" --include="*.py" --exclude-dir=.venv . 2>/dev/null | head -8 || echo none`
+- Open TODOs: !`out=$(git grep -n "TODO\|FIXME" -- . ':(exclude).claude/commands/prime.md' ':(exclude).claude/hooks/HOOKS-REF.md' ':(exclude)docs/BACKLOG.md' | head -8); [ -n "$out" ] && echo "$out" || echo none`
 - Uncommitted diff shape: !`git diff HEAD --stat | tail -5`
 
 ## Verification
