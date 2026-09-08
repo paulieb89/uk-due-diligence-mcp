@@ -12,9 +12,10 @@ description: Load current repo state - git activity, work in flight, verificatio
 - Hotspots (30 commits): !`git log --pretty=format: --name-only -30 | sort | uniq -c | sort -rg | head -8`
 
 ## Work in flight
-- Plans: !`command ls -t ~/.claude/plans/ 2>/dev/null | head -3`
+- Repo plans/specs: !`find docs -maxdepth 3 -name "*.md" \( -path "*/plans/*" -o -path "*/specs/*" \) 2>/dev/null | xargs -r ls -t 2>/dev/null | head -5`
+- Backlog (top 3 live): !`grep -m 3 "^- [^~]" docs/BACKLOG.md 2>/dev/null || echo none`
 - Open TODOs: !`grep -rn "TODO\|FIXME" --include="*.py" --exclude-dir=.venv . 2>/dev/null | head -8 || echo none`
-- Uncommitted diff shape: !`git diff --stat | tail -5`
+- Uncommitted diff shape: !`git diff HEAD --stat | tail -5`
 
 ## Verification
 - Smoke (deployed): !`uv run --no-sync python scripts/mcp_smoke_test.py --deployed 2>&1 | tail -3`
