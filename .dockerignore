@@ -7,3 +7,20 @@ dist
 *.egg-info
 venv
 research/
+
+# Repo-internal material. The image runs `python server.py` (Dockerfile CMD) and
+# nothing below is on that path, but `COPY . .` takes the whole build context, so
+# each has to be named. .dockerignore is independent of .gitignore: a gitignored
+# file still enters the context on a hand-run `fly deploy` from a working tree.
+# CI builds from actions/checkout and never sees the untracked ones at all.
+.claude/
+docs/
+tests/
+dashboard.json
+
+# Bare patterns match only at the context root, so nested caches need `**/`.
+# `.mypy_cache` and `__pycache__` above are root-only and missed tests/.mypy_cache.
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
