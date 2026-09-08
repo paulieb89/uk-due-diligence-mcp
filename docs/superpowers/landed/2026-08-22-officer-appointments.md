@@ -1,5 +1,17 @@
 # Officer Appointments & Related-Company Discovery Implementation Plan
 
+> **LANDED in v1.3.0 — filed 2026-09-08.** Shipped as `officer_appointments`, live on
+> `uk-due-diligence-mcp.fly.dev`. Implementation is in `companies_house.py` and
+> `models.py`; `tests/test_officer_appointments.py` (13 cases, green 2026-09-08) is the
+> standing assertion. First shipped in `a5199ce`, released in v1.3.0.
+>
+> **The checkboxes below were never ticked and are not a to-do list.** They
+> record how the work was decomposed, not what remains — every box describes
+> shipped code. Left unticked rather than back-filled: back-filling would
+> invent a per-task history nobody recorded. Kept for the design rationale and
+> the constraints, which the code does not restate; verify any claim here
+> against the code before relying on it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add an `officer_appointments(officer_id)` tool that returns a person's full Companies House appointment history (current + historic), and expose `officer_id` on `company_officers` results so an agent can chain the two calls to discover companies not named anywhere in the prompt.
@@ -8,7 +20,7 @@
 
 **Tech Stack:** Python 3.12, FastMCP v3, Pydantic v2, httpx (`httpx.MockTransport` for offline tests), pytest + pytest-asyncio, `uv`.
 
-**Spec:** `docs/superpowers/specs/2026-08-22-officer-appointments-design.md`
+**Spec:** `docs/superpowers/landed/2026-08-22-officer-appointments-design.md` (moved 2026-09-08)
 
 ## Global Constraints
 

@@ -1,5 +1,17 @@
 # Companies House Charge Records Implementation Plan
 
+> **LANDED in v1.3.0 — filed 2026-09-08.** Shipped as `company_charges`, live on
+> `uk-due-diligence-mcp.fly.dev`. Implementation is in `companies_house.py` and
+> `models.py`; `tests/test_company_charges.py` (16 cases, green 2026-09-08) is the
+> standing assertion. First shipped in `e1f4855`, released in v1.3.0.
+>
+> **The checkboxes below were never ticked and are not a to-do list.** They
+> record how the work was decomposed, not what remains — every box describes
+> shipped code. Left unticked rather than back-filled: back-filling would
+> invent a per-task history nobody recorded. Kept for the design rationale and
+> the constraints, which the code does not restate; verify any claim here
+> against the code before relying on it.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a `company_charges(company_number)` tool returning the complete, structured Companies House charge history for a company (every charge, current and historic, with full status/dates/security detail), and refactor `company_profile.has_charges` to derive from the same source instead of running a separate, semantically-narrower paginated check.
@@ -8,7 +20,7 @@
 
 **Tech Stack:** Python 3.12, FastMCP v3, Pydantic v2, httpx (`httpx.MockTransport` for offline tests), pytest + pytest-asyncio, `uv`.
 
-**Spec:** `docs/superpowers/specs/2026-08-22-charge-records-design.md`
+**Spec:** `docs/superpowers/landed/2026-08-22-charge-records-design.md` (moved 2026-09-08)
 
 ## Global Constraints
 

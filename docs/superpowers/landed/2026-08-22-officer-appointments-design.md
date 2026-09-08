@@ -1,6 +1,10 @@
 # Officer Appointments & Related-Company Discovery
 
-Status: approved, ready for implementation planning
+Status: ~~approved, ready for implementation planning~~ — **IMPLEMENTED and
+LANDED in v1.3.0**, filed 2026-09-08. Shipped as `officer_appointments`. Status line
+struck rather than replaced: what this document was approved *as* is part of
+the record. The design below is the rationale for the shipped shape; the code
+is the authority on what it actually does.
 Author: Claude (with paulieb89)
 Date: 2026-08-22
 
