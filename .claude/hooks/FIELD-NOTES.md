@@ -52,12 +52,35 @@ location-and-maturity question.
 **Believed:** printing to stderr surfaces a warning to Claude even when the hook
 does not block, so a hook could "warn without blocking".
 
-**True:** it does not. Exit-0 stderr goes to the debug log only.
+**True:** it does not. ~~Exit-0 stderr goes to the debug log only.~~ The
+narrow claim survives; the "debug log only" half does not — see AMENDED below.
 
 > "Stderr from a hook that exits 0 goes to the debug log only, never the
 > transcript, and Claude never sees it."
 > — Claude Code Hooks reference, <https://code.claude.com/docs/en/hooks>,
 > accessed 2026-09-07.
+
+### AMENDED 2026-09-08 — where exit-0 stderr actually goes
+
+Ratified amendment, pasted verbatim:
+
+> Exit-0 stderr is not a model-facing channel. Claude never sees it, and the
+> transcript never shows it. Contrary to the Hooks reference, it does not appear
+> in the debug log — verified absent at both default and
+> `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose` on Claude Code 2.1.263, Linux. It is
+> recoverable only from `--output-format stream-json --include-hook-events`,
+> where `hook_response` exposes `stdout`, `stderr`, and `output` as separate
+> fields. Docs-confirmed ≠ verified; this one was docs-confirmed and observed
+> false.
+
+This is the second claim in this section sourced from the reference page and
+found false against the runtime. The first was the corollary retracted below.
+Note what that costs the citation above: it is still what the docs say, and it
+is still wrong in its second clause. A quote is evidence of the documentation,
+never of the behaviour.
+
+The `hook_response` recovery path is independently corroborated here — §10, run
+D — on the same build.
 
 **Transcript-level evidence** (parallel session, 2026-09-07): `hook_success`
 attachments carry the stderr text verbatim in the internal record, but the
@@ -479,6 +502,11 @@ before-and-after rather than two readings taken apart.
 **Verdict.** `additionalContext` works and needs no further proof. §2's "exit 2
 is the only reliable channel" is corrected there.
 
+§10 extends this to the exit-2 path on live traffic and, more usefully, bounds
+the instrument: this section read the *session transcript*, which is not the
+same artifact as a `-p` stream-json stream, and neither one is authoritative for
+a channel it was not asked to emit.
+
 ### The pattern behind both bugs
 
 Two independent files each asserted, in their own prose, that exit-0 stderr
@@ -549,3 +577,97 @@ emitted and dispatched", not "the ask prompt works".
 Do not resolve this by deploying to test it. Prod was healthy at `v1.3.0` when
 this was written and a hand deploy would have shipped 15 unreleased commits — the
 drift the gate exists to prevent. The gap is cheap to hold and expensive to close.
+
+---
+
+## 10. Exit-2 delivery, and what stream-json actually proves
+
+**2026-09-08, Claude Code 2.1.263, Linux.** Four nested `claude -p` runs against
+this repo's live `post_edit_python.py`. Probe: Write `_hookprobe.py` containing
+`import os`, which ruff fails F401, so the hook takes its exit-2 branch. Write
+rather than a heredoc, because the matcher is `Write|Edit|MultiEdit`.
+
+### Exit 2 delivers, measured three times
+
+The model received the diagnostic in all three hooks-enabled runs and quoted it
+back. The delivery envelope, verbatim:
+
+```
+PostToolUse:Write hook blocking error from command: "uv run --no-sync --project
+"$CLAUDE_PROJECT_DIR" python "$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit_python.py"":
+[...]:
+ruff failed on <repo-root>/_hookprobe.py:
+
+F401 [*] `os` imported but unused
+ --> _hookprobe.py:1:8
+```
+
+Note the envelope names the hook and its full command line. §2's exit-2 claim was
+read from the reference; it is now measured on live traffic.
+
+One elision, disclosed: the run printed an absolute path where `<repo-root>`
+stands. `check_invariants.py` rejected this section on its ABSOLUTE PATH rule
+when it was first written — a true positive against new prose, caught on the
+standalone run rather than the hook path, since a `python3` heredoc does not
+match `Write|Edit|MultiEdit`. Everything else in the block is unaltered.
+
+### The instrument correction — check per event type, not per format
+
+Runs A2/B/A3 used `--output-format stream-json --verbose`. In those streams the
+`user` tool_result event read, in full:
+
+```
+"content": "File created successfully at: .../_hookprobe.py"
+```
+
+— while the model demonstrably had the whole ruff diagnostic. The first reading
+of that was "stream-json does not carry hook output". **That is wrong, and the
+error is instructive.** Those runs omitted `--include-hook-events`, so the events
+that carry hook output were never emitted at all. Run D added the flag and got
+them (2 per Write, one per configured handler):
+
+```
+"subtype": "hook_response", "hook_name": "PostToolUse:Write",
+"exit_code": 2, "outcome": "error",
+"output":  "\nruff failed on ...F401...",
+"stderr":  "\nruff failed on ...F401...",
+"stdout":  ""
+```
+
+Keys: `hook_id`, `hook_name`, `hook_event`, `output`, `stdout`, `stderr`,
+`exit_code`, `outcome`. `check_invariants.py`'s handler appears alongside with
+all three text fields `""` and `exit_code: 0` — a silent pass is visible as a
+pass, not as an absence.
+
+**The scope, stated precisely.** A stream-json probe proves what it directly
+captures and nothing beyond it. `tool_result` captures the *tool's* result;
+`hook_response` captures the *hook's*. The earlier UserPromptSubmit probe
+generalised safely only because its evidence *was* the `hook_response` event.
+Here the evidence was the model's subsequent behaviour, and the JSON field was
+silent about something that had plainly happened. Verify per event type; "I read
+the stream and saw nothing" is a claim about the flags passed, not about the
+runtime.
+
+### Negative control — run, after being attempted wrongly twice
+
+Purpose: distinguish *fired and dropped* from *never fired*.
+
+| attempt | result |
+|---|---|
+| `--bare` | unusable — skips the credential path (`Not logged in · Please run /login`), and narrows tools to `Bash`/`Edit`/`Read` |
+| `--settings '{"hooks":{}}'` | hooks still fired |
+| `--settings '{"hooks":{"PostToolUse":[]}}'` | hooks still fired |
+| `--settings '{"disableAllHooks": true}'` | **works** — model reports `NONE`, zero `hook_response` events, probe left dirty |
+
+The two middle rows are not findings. HOOKS-REF.md:278 states hook entries
+**merge** across settings levels rather than replacing each other, so neither
+form could ever have overridden project hooks; :708 names
+`--settings '{"disableAllHooks": true}'` as the documented way to turn hooks off
+for one run "whatever the project's settings say". Both were on the page already.
+
+**This was briefly written up as "the negative control is structurally
+unrunnable."** It is not; it was untried as specified. The failure is the one
+§4's order-of-work names first — read the reference end to end before building —
+committed while writing notes about a section that says exactly that. Recorded
+because "blocked" and "not yet attempted correctly" are different states, and
+only one of them is an invitation to stop.
