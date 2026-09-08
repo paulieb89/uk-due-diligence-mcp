@@ -24,3 +24,21 @@ dashboard.json
 **/.mypy_cache
 **/.pytest_cache
 **/.ruff_cache
+
+# Second pass: the rest of the repo-internal surface. Same reasoning — none of
+# it is reachable from `python server.py`. Checked before excluding: neither
+# fly.toml has a release_command, so nothing runs scripts/ at deploy time, and
+# no runtime module reads a repo file (sanctions.py's only open() calls are on
+# tempfile.mkstemp downloads).
+CLAUDE.md
+LAUNCHGUIDE.md
+.github/
+.mcp.json
+scripts/
+examples/
+.gitignore
+.dockerignore
+
+# Deliberately kept: LICENSE and the policy set (PRIVACY.md, TERMS.md,
+# SECURITY.md) plus README.md. Small, and a distributed image is the wrong place
+# to strip its own licence and policy terms.
