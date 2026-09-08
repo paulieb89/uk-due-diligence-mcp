@@ -23,6 +23,11 @@ Releases are **GitHub-release-triggered**, not tag-triggered: `release.yml` runs
 nothing, and a hand-run `fly deploy` ships prod while silently skipping the PyPI
 publish. Push to main deploys staging only.
 
+A hand-run `fly deploy` is **refused** by `.claude/hooks/pre_bash_deploy.py`. A
+deliberate rollback re-runs it with `FLY_DEPLOY_ACK=1`, which downgrades the
+refusal to a confirmation prompt — it does not wave the command through, because
+an agent reads the refusal and could otherwise set the variable itself.
+
 Bumping a version means editing **three** files or the registries drift (this has
 happened — see `daaa9dc`, and again at v1.3.0):
 `pyproject.toml`, `server.py` (`smithery_server_card`), `server.json` (×2).

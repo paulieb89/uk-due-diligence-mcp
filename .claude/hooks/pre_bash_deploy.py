@@ -1,31 +1,113 @@
 #!/usr/bin/env python3
-"""PreToolUse: warn before a hand-run Fly deploy. Asks — never blocks.
+"""PreToolUse: an acknowledge gate on hand-run Fly deploys.
 
-A manual `fly deploy` ships prod but skips the PyPI publish, so the git tag
-and the PyPI release silently stop describing what is running. release.yml
-fires on `release: published`, not on a pushed tag, so "I tagged it" does not
-mean "it published".
+A manual `fly deploy` ships prod but skips the PyPI publish, so the git tag and
+the PyPI release silently stop describing what is running.
+
+Three outcomes, and the choice of each is load-bearing:
+
+  deploy, no ack -> "deny". The reason is shown to Claude (HOOKS-REF.md:1745),
+                    so it names the escape rather than dead-ending.
+  deploy, acked  -> "ask". NOT "allow": allow skips the permission prompt
+                    (:1744), and since Claude reads the deny reason it could set
+                    the variable itself and deploy with nobody watching. Plain
+                    pass-through is not sufficient either — in auto mode the
+                    classifier approves Bash calls silently. "ask" is the only
+                    decision documented to force a prompt anyway (:1755), and
+                    its reason is shown to the user, which is the right audience
+                    for a confirmation.
+  anything else  -> silent.
 
 There are legitimate reasons to deploy by hand (rollback, a wedged machine).
-This surfaces the cost and lets a human decide.
+FLY_DEPLOY_ACK=1 is the escape, honoured both as a command-string env prefix and
+in this process's own environment — a `VAR=val cmd` prefix is part of the
+command text the hook is handed, not of the hook's environment, so reading only
+os.environ would miss the form people actually type.
+
+Deliberately not a warning printed to stderr: at exit 0 that reaches nobody
+(FIELD-NOTES §1). The decision JSON is the whole message.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import sys
 
-DEPLOY = re.compile(r"\bfly(?:ctl)?\s+deploy\b")
+ACK_VAR = "FLY_DEPLOY_ACK"
+DEPLOYERS = {"fly", "flyctl"}
+OPERATORS = {"&&", "||", ";", "|", "&", "\n"}
+ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
 
-REASON = """`fly deploy` by hand ships prod but skips the PyPI publish.
+# Fallback only, for a command shlex cannot tokenise. Unanchored and so prone to
+# matching prose — which is the old defect — but an unparseable command naming a
+# deploy is exactly when a human should look, so this one errs closed.
+FALLBACK = re.compile(r"\bfly(?:ctl)?\s+deploy\b")
 
-The release pipeline is: GitHub release published -> release.yml -> PyPI -> flyctl deploy.
-It does NOT fire on a pushed tag alone. Deploying by hand leaves PyPI and the git
-tags describing a version that is not what is running.
+DENY_REASON = (
+    "Hand deploys bypass the release pipeline (PyPI publish + CI provenance).\n"
+    "See CLAUDE.md > Releasing. Deliberate rollback: re-run with "
+    f"{ACK_VAR}=1."
+)
 
-Legitimate for a rollback or a wedged machine. If this is a release, cut a GitHub
-release instead. Afterwards, scripts/check-deploy-drift.sh will tell you whether
-prod matches origin/main."""
+ASK_REASON = (
+    f"{ACK_VAR} is set, so this hand deploy is acknowledged. It ships prod "
+    "without publishing to PyPI, leaving the tags and PyPI describing a version "
+    "that is not what is running. Confirm only if this is a rollback or a wedged "
+    "machine."
+)
+
+
+def _segments(command: str) -> list[list[str]] | None:
+    """Split into subcommands, respecting quotes. None if it cannot be parsed.
+
+    Quote-aware so that `echo "a; fly deploy"` stays one token and never looks
+    like a second subcommand — splitting the raw string on operators is what let
+    prose match in the first place.
+    """
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in OPERATORS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return [s for s in segments if s]
+
+
+def _acknowledged(value: str | None) -> bool:
+    return bool(value) and value.strip().lower() not in {"0", "false", "no"}
+
+
+def _classify(command: str) -> tuple[bool, bool]:
+    """Return (is_deploy, acknowledged_in_command)."""
+    segments = _segments(command)
+    if segments is None:
+        return bool(FALLBACK.search(command)), False
+
+    for segment in segments:
+        env_prefix: dict[str, str] = {}
+        rest = list(segment)
+        while rest:
+            m = ASSIGNMENT.match(rest[0])
+            if not m:
+                break
+            env_prefix[m.group(1)] = m.group(2)
+            rest.pop(0)
+
+        # Anchored to command position: the deployer must be the command being
+        # run, not a word inside an argument. `fly -a app deploy` still counts.
+        if rest and rest[0] in DEPLOYERS and "deploy" in rest[1:]:
+            return True, _acknowledged(env_prefix.get(ACK_VAR))
+
+    return False, False
 
 
 def main() -> int:
@@ -37,19 +119,19 @@ def main() -> int:
     if data.get("tool_name") != "Bash":
         return 0
     command = (data.get("tool_input") or {}).get("command") or ""
-    if not DEPLOY.search(command):
+
+    is_deploy, acked_in_command = _classify(command)
+    if not is_deploy:
         return 0
 
-    # Also to stderr: under an auto-approving permission mode the "ask" can be
-    # granted without ever showing the reason, and a warning nobody reads is not
-    # a warning. stderr puts it in the transcript either way.
-    print(f"\n[deploy warning]\n{REASON}\n", file=sys.stderr)
+    acked = acked_in_command or _acknowledged(os.environ.get(ACK_VAR))
+    decision, reason = ("ask", ASK_REASON) if acked else ("deny", DENY_REASON)
 
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": "ask",
-            "permissionDecisionReason": REASON,
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason,
         }
     }))
     return 0

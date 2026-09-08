@@ -25,6 +25,12 @@
         "hooks": [
           {
             "type": "command",
+            "if": "Bash(fly *)",
+            "command": "uv run --no-sync --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_bash_deploy.py\""
+          },
+          {
+            "type": "command",
+            "if": "Bash(flyctl *)",
             "command": "uv run --no-sync --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_bash_deploy.py\""
           }
         ]

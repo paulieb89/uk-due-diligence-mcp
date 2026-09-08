@@ -47,6 +47,9 @@ with the comment "stderr puts it in the transcript either way", then returns 0.
 That premise is false; the stderr line is not delivered to anyone. Commit
 `47c81a4` ("surface the deploy warning on stderr too") was built on it.
 
+**Fixed 2026-09-08.** Those five lines are gone; the decision JSON is now the
+whole message. See §4 and §8.
+
 ### ~~Corollary: warn-without-blocking is unimplementable~~ — RETRACTED 2026-09-08
 
 The earlier draft argued that under an auto-granting mode nobody reads an `"ask"`
@@ -89,10 +92,16 @@ JSON that fails schema validation **still blocks** — stderr becomes the blocki
 reason and the validation failure goes to the debug log (HOOKS-REF.md:802). Before
 v2.1.214 that combination was treated as non-blocking; we are past that.
 
-So exit 2 is the *only* reliable channel from a hook to the model, and it works
-in PostToolUse too — where it cannot prevent anything, but the model does see
-the text. `check_invariants.py` and `post_edit_python.py` both rely on this and
-are correct as written.
+~~So exit 2 is the *only* reliable channel from a hook to the model~~ —
+**CORRECTED 2026-09-08.** Exit 2 works, and it works in PostToolUse too, where
+it cannot prevent anything but the model does see the text. It is not the only
+channel: `hookSpecificOutput.additionalContext` at exit 0 also reaches the model,
+now measured rather than assumed (§8). The narrow surviving claim is about
+*stderr* at exit 0 reaching nobody — not about exit 2 being the sole route.
+
+`check_invariants.py` still relies on exit 2 and is correct as written.
+`post_edit_python.py` now uses both: exit 2 for failures, `additionalContext`
+for the success and fail-open paths.
 
 ---
 
@@ -112,9 +121,25 @@ It does not — on 2.1.263 a hook's `"ask"` forces the prompt (HOOKS-REF.md:1755
 
 ---
 
-## 4. Filed, not yet done: pre_bash_deploy becomes an acknowledge gate
+## 4. DONE 2026-09-08: pre_bash_deploy is an acknowledge gate
 
-Design decided 2026-09-07; implementation is a separate task.
+Design decided 2026-09-07, implemented 2026-09-08. The spec below is kept as
+written, with the two places implementation contradicted it marked inline.
+
+**One correction the design missed entirely.** The spec said the hook *allows*
+the command when `FLY_DEPLOY_ACK=1` is set. That is unsafe, and so is the
+obvious repair. `"allow"` skips the permission prompt (HOOKS-REF.md:1744) — and
+because a `"deny"` reason is shown to **Claude** (:1745), an agent that reads the
+refusal can set the variable itself and deploy with no human involved. Falling
+back to plain pass-through (exit 0, no JSON) does not fix it either: in auto mode
+the classifier approves Bash calls silently, which is what auto mode is for.
+
+The ACK path therefore returns **`"ask"`** — the only decision documented to
+force a prompt even in auto mode (:1755) — and its reason is shown to the user,
+which is the right audience for a confirmation. Picking a decision channel is
+picking an audience: `deny` reasons are agent-facing, `ask`/`allow` reasons are
+human-facing. A gate whose whole point is a human in the loop has to keep its
+guarantee in the channel a human actually reads.
 
 - Switch `permissionDecision` from `"ask"` to `"deny"`, and have the reason name
   `FLY_DEPLOY_ACK=1` as the explicit escape. The hook allows the command when
@@ -138,9 +163,16 @@ Design decided 2026-09-07; implementation is a separate task.
   string anywhere, including inside an `echo`, a heredoc, a commit message or a
   file being written. Target: `^\s*(fly|flyctl)\s+deploy`, also matching after
   `&&`, `;` and `|`.
-- **Measured 2026-09-07: 4 firings on inert strings, 0 on real deploys.** A guard
-  with no true positives and a 100% false-positive rate is not yet an
-  instrument. Fix the matcher before trusting the gate.
+- ~~**Measured 2026-09-07: 4 firings on inert strings, 0 on real deploys.** A
+  guard with no true positives and a 100% false-positive rate is not yet an
+  instrument.~~ — **CORRECTED 2026-09-08.** The firing counts are right; the
+  diagnosis misread them. Re-measured against the live hook by piping synthetic
+  payloads: it returned `ask` for `fly deploy`, `git push && fly deploy` and
+  `flyctl deploy --ha=false` as well as for `echo "run fly deploy to ship"` and
+  `git commit -m "note: fly deploy is manual"`. **Recall was never the defect —
+  precision was.** "0 true positives" recorded that nobody hand-deployed in that
+  window, not that the matcher missed real deploys. A guard can be both correct
+  and untrustworthy; this one was.
 
 ### Spec detail (added 2026-09-07)
 
@@ -167,6 +199,17 @@ subcommand is checked**, so `npm test && git push` matches `Bash(git *)`. With
 `"if": "Bash(fly deploy *)"`, the measured false positive `echo "run fly deploy
 to ship"` does not match any subcommand, so the hook never spawns.
 
+**Amended 2026-09-08, two ways.** First, `if` holds exactly one permission rule —
+there is no `&&`, `||` or list syntax (HOOKS-REF.md:432) — so `fly` and `flyctl`
+need **two handler entries**, not one pattern. Second, `Bash(fly deploy *)` is
+the wrong half of the trade. The same table's last row: a pattern specifying more
+than the command name "runs the hook anyway on `$()`, backticks, or `$VAR`".
+`Bash(fly deploy *)` is such a pattern, so it spawns on essentially every command
+containing a shell variable; `Bash(fly *)` is a command-name pattern and does not.
+The more specific pattern is the noisier one. Shipped as
+`Bash(fly *)` + `Bash(flyctl *)`; `fly logs` and `fly status` spawn and exit
+silently, which is cheap.
+
 Two caveats that keep the in-hook check necessary:
 
 - The docs are explicit that this is best-effort: *"When Claude Code can't
@@ -181,18 +224,26 @@ So `if` is a spawn filter that removes most of the noise for free; the hook keep
 its own matcher as the actual decision. Write the regex for what `if` lets
 through, not from scratch.
 
-Fail-on-purpose cases, all four required before the gate is trusted:
+Fail-on-purpose cases. **Amended 2026-09-08** — the two ACK rows read `allow`
+as filed, which is precisely the defect the correction above exists to prevent.
+A table is the half of a spec that actually gets executed, so leaving it would
+have certified the bug:
 
 | case | expected |
 |---|---|
-| `FLY_DEPLOY_ACK=1 fly deploy` (env-prefix form) | allow |
-| `fly deploy` with `FLY_DEPLOY_ACK=1` exported | allow |
-| `git push && fly deploy` | **block** |
+| `FLY_DEPLOY_ACK=1 fly deploy` (env-prefix form) | ~~allow~~ **`ask`** |
+| `fly deploy` with `FLY_DEPLOY_ACK=1` exported | ~~allow~~ **`ask`** |
+| `git push && fly deploy` | **`deny`** |
 | `echo "run fly deploy to ship"` | silent — no fire |
 
-The last two are the ones that matter: the third is the real deploy the current
-matcher has never caught, the fourth is the inert string it fires on four times
-out of four.
+The ACK rows must assert `ask` exactly, not "not deny" — a hook returning
+`"allow"` passes the weaker assertion while carrying the whole defect.
+
+**Now a standing assertion, not a one-off.** `tests/test_pre_bash_deploy.py`
+runs these plus `;`-separated and leading-whitespace forms, `fly logs`/`fly
+status`, a non-Bash tool and an unparseable payload — 15 cases. Written before
+the rewrite, so its first run caught the real pre-existing defect (`assert 'ask'
+== 'deny'`) rather than a staged one.
 
 ### Order of work
 
@@ -210,7 +261,14 @@ out of four.
 
 ---
 
-## 5. Filed for the uk-legal harvest
+## 5. RESOLVED 2026-09-08: two shapes, both now in use
+
+Marked RESOLVED, not CORRECTED — nothing in this section was false. "Choose at
+harvest time" was a deliberate deferral, and the choice has now been made:
+**exit 2 for failures, `additionalContext` for informational output.**
+`post_edit_python.py` implements both as of 2026-09-08 (§8). The uk-legal
+harvest this was filed for is deferred; the decision is not.
+
 
 `uk-legal-mcp`'s `post_edit_check.py` is built on the premise "stderr so Claude
 sees it, exit 0 always". Per §1 and §2 that is falsified in both halves: exit-0
@@ -232,7 +290,8 @@ Caveat on the softer shape, worth knowing before choosing it: `additionalContext
 must read as **factual statements, not imperative instructions** — the docs warn
 that text framed as out-of-band system commands "can trigger Claude's
 prompt-injection defenses, which causes Claude to surface the text to you instead
-of treating it as context" (HOOKS-REF.md:1005). A lint message phrased as an order
+of treating it as context" (HOOKS-REF.md:1003 — **corrected 2026-09-08**
+from :1005, which is the replay note two lines further down). A lint message phrased as an order
 can therefore be delivered as a warning *about* the hook rather than as context.
 Also: on `--continue`/`--resume`, PostToolUse `additionalContext` is replayed from
 the transcript rather than re-run, so embedded timestamps or SHAs go stale.
@@ -328,10 +387,142 @@ Note the JSON: `$CLAUDE_PROJECT_DIR` must be written with escaped quotes
 caught it before anything was written, which is the one guard in this whole
 exercise that worked first time without being asked.
 
-### Fleet sweep, not yet run
+### Fleet sweep — RUN 2026-09-08
 
-This is a bug in a *pattern*, so it is latent in every copy of the pattern.
-Harvest task: grep every fleet repo's `.claude/settings*.json` for hook commands
-with a relative script path, and anchor each to `$CLAUDE_PROJECT_DIR`. Any repo
-whose hooks have only ever run from its own root is carrying the same defect,
-undetected for the same reason this one was.
+Scope: every fleet repo's `.claude/settings*.json`, every `SKILL.md` and command
+frontmatter, and the global `~/.claude/settings.json` (which has no `hooks` key
+at all). Only **two** repos carry hooks. This one is anchored; `uk-legal-mcp`'s
+`scope` skill already uses `${CLAUDE_PROJECT_DIR:-.}`.
+
+Two files remain, both in `uk-legal-mcp`, both **deferred** with that repo:
+
+- `settings.json` — relative `python3 .claude/hooks/…` on both handlers. The
+  §7 defect exactly.
+- `settings.example.json` — worse, and in the opposite direction: it invents
+  `$PROJECT_ROOT`, which appears **zero** times in the Hooks reference against
+  `CLAUDE_PROJECT_DIR`'s 19, so it expands to empty. It also invokes the `.py`
+  with no interpreter, and the scripts carry no exec bit. Guessing a variable
+  name is the same failure as hard-coding a path: neither enumerated what the
+  platform actually ships.
+
+The sweep was smaller than filed. That is worth recording too — "latent in every
+copy of the pattern" assumed more copies than exist.
+
+---
+
+## 8. Both delivery channels, measured on 2.1.263
+
+**2026-09-08.** §1 established the dead exit-0 stderr channel from a parallel
+session and reasoned the rest by analogy. Analogy is what this file exists to
+replace, so all three cases were run here, on `post_edit_python.py`, in one
+session.
+
+**Method.** Write a throwaway `_hookprobe.py` at repo root *via the Write tool* —
+a Bash heredoc cannot fire this hook, whose matcher is `Write|Edit|MultiEdit`,
+which is the same gap that lets a `sed` bypass `check_invariants.py` — then read
+the session transcript for the `PostToolUse` attachment.
+
+**Case 1 — the old shape, exit 0 with stderr. Dead.**
+
+```
+.attachment.hookName = "PostToolUse:Write"
+.attachment.exitCode = 0
+.attachment.stderr   = "ruff clean, 137 passed in 17.38s\n"   <- text exists
+.attachment.stdout   = ""
+.attachment.content  = ""                                      <- delivered
+```
+
+This is what distinguishes *dropped* from *never fired*, which silence alone
+cannot: ruff and 137 tests demonstrably ran, the summary was captured verbatim,
+and the model was handed `""`.
+
+**Case 2 — exit 2. Delivered.** Same file, `import os` left unused so ruff fails.
+The full diagnostic arrived immediately as a blocking error. It also returned the
+`file_path` **absolute**, which incidentally settles a question for the deferred
+uk-legal harvest: that repo's `str(p).startswith("src/")` test gate can never be
+true.
+
+**Case 3 — exit 0 with `additionalContext`. Delivered.**
+
+```
+.attachment.hookName = "PostToolUse:Write"
+.attachment.content  = ["ruff reports no issues and the test suite passes: 152 passed."]
+```
+
+Note the shape differs: `content` is a list, and `exitCode`/`stderr` are absent
+on the JSON path rather than empty. Same probe, same session as case 1 — a clean
+before-and-after rather than two readings taken apart.
+
+**Verdict.** `additionalContext` works and needs no further proof. §2's "exit 2
+is the only reliable channel" is corrected there.
+
+### The pattern behind both bugs
+
+Two independent files each asserted, in their own prose, that exit-0 stderr
+reaches Claude:
+
+- `pre_bash_deploy.py` — "stderr puts it in the transcript either way" (§1).
+- `uk-legal-mcp`'s `post_edit_check.py` — "Errors are printed to stderr so Claude
+  Code sees them as context."
+
+Neither author read it from the other. A wrong belief that appears independently
+in two repos is not two bugs, it is a **fleet-level default** — the shape a hook
+takes when written from intuition about how stderr behaves in a terminal, where
+it *is* the channel you see. The next hook written from memory will carry it too.
+
+That is also why the failure is so durable: the belief is unfalsifiable from the
+outside. A hook whose message reaches nobody looks exactly like a hook with
+nothing to say.
+
+## 9. `deny` and `ask` are not equally verifiable
+
+**2026-09-08.** §4 shipped the acknowledge gate and `tests/test_pre_bash_deploy.py`
+asserts its logic (15 cases, green). Those tests call `_classify()` and `main()`
+directly, so they prove the *decision*, not the *dispatch* — whether
+`settings.json`'s `if: "Bash(fly *)"` spawn filter actually routes a real Bash
+call to the hook. Presence in the config file is not load.
+
+**The deny path was live-fired end to end.** Command: `fly deploy --help` — a
+string the matcher classifies as a deploy (`rest[0] in DEPLOYERS` and `"deploy"
+in rest[1:]`) but which, if the hook were *not* wired, merely prints help. That
+asymmetry is the whole trick: the probe is deploy-shaped to the gate and inert to
+Fly, so a dispatch failure degrades to a no-op instead of shipping prod.
+
+```
+$ fly deploy --help
+<error> Hand deploys bypass the release pipeline (PyPI publish + CI provenance).
+        See CLAUDE.md > Releasing. Deliberate rollback: re-run with FLY_DEPLOY_ACK=1.
+```
+
+Verdict: config loads, the spawn filter dispatches, the matcher anchors, and the
+deny reason reaches **Claude** — confirming `HOOKS-REF.md:1745` on live traffic,
+not by reading. §4's design note can now cite a measurement.
+
+That delivery is also the standing argument for §4's one design change. The agent
+receives the text naming `FLY_DEPLOY_ACK=1`; it therefore *holds* the bypass. An
+`"allow"` on the ack path would let it exercise what it was just handed, with no
+person in the loop. `"ask"` is what keeps the second step in a human channel.
+
+**The ask path cannot be closed the same way, and this is structural.** Tripping
+a `deny` is free — the guarded action never runs, so the probe costs nothing.
+Approving an `ask` *is* the guarded action. There is no dry-run of a "yes", and
+no inert probe exists: any command that reaches the prompt is by construction one
+that deploys if confirmed. So the chain splits:
+
+| Link | deny path | ask path |
+|---|---|---|
+| decision JSON at the hook boundary | verified (tests + piped payload) | verified (piped payload) |
+| settings dispatch / spawn filter | verified (live fire above) | shared with deny — verified |
+| reason rendered to its audience | verified (agent read it) | **unverified by construction** |
+
+Only the last cell is open, and it is the user-facing render. Staging it would
+require deploying prod to find out whether the confirmation text was legible —
+paying the exact cost the gate exists to avoid. This is the case the global
+prove-it-fires rule carves out for passive closure: **the next time a deliberate
+hand deploy happens, read the prompt before answering it and record whether the
+reason arrived intact.** Until then the correct claim is "the ask decision is
+emitted and dispatched", not "the ask prompt works".
+
+Do not resolve this by deploying to test it. Prod was healthy at `v1.3.0` when
+this was written and a hand deploy would have shipped 15 unreleased commits — the
+drift the gate exists to prevent. The gap is cheap to hold and expensive to close.
