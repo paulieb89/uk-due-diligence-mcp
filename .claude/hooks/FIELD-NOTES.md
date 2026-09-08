@@ -22,6 +22,29 @@ did not survive reading the page itself. Corrections are inline and marked.
    destroys the only thing this file is for: the record of what was believed and
    why it was wrong.
 
+**Where new information goes — provisional placement, 2026-09-08.** This is a
+note about the `.claude/` directory's own conventions, not an observation about
+the runtime, so by its own routing rule it does not belong in an evidence log.
+It sits here because the directory-level doc that should hold it does not exist
+yet — checked 2026-09-08, `.claude/` contains `commands/`, `hooks/` and
+`settings*.json`, and no README or conventions file. Move this block there when
+that doc lands; it is a placeholder with a forwarding address, not a resident.
+
+> A verified, citable claim about platform or repo behaviour → **FIELD-NOTES**
+> (evidence required — a citation, a measurement, or both). Something small,
+> real and non-blocking → one line in **`docs/BACKLOG.md`**, triaged into a plan
+> when picked up. Anything touching multiple files with a genuine design
+> tradeoff → a plan in **`docs/plans/`**, using `docs/plans/TEMPLATE-handoff.md`.
+> A FIELD-NOTES entry that has stabilised into a permanent constraint, rather
+> than a one-off discovery → **promote it into something that actually runs** —
+> a hook, a `check_invariants.py` check, a committed test — rather than leaving
+> it as prose someone has to remember to reread.
+
+The last clause is the one with no mechanism behind it: nothing currently
+detects a note that has earned promotion, so it stays a habit until something
+enforces it. Filed in `docs/BACKLOG.md` (2026-09-08) as this file's open
+location-and-maturity question.
+
 ---
 
 ## 1. stderr from a hook that exits 0 never reaches the model
