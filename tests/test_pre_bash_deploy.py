@@ -75,6 +75,7 @@ def decide(command: str, *, ack_in_env: bool = False, tool: str = "Bash") -> str
         "flyctl deploy",
         "fly deploy --ha=false --remote-only",
         "git push && fly deploy",
+        "git push && flyctl deploy",
         "git push; fly deploy",
         "  fly deploy",
     ],
@@ -106,6 +107,16 @@ def test_inert_text_does_not_fire(command):
 def test_ack_as_command_prefix_asks():
     """A `VAR=val cmd` prefix is part of the command text, not the hook's env."""
     assert decide("FLY_DEPLOY_ACK=1 fly deploy") == "ask"
+
+
+def test_ack_as_command_prefix_flyctl_asks():
+    """`flyctl` is the canonical binary; `fly` is commonly a symlink to it.
+
+    Added 2026-09-09 as a regression pin, not a fix: both the `if` dispatch
+    filter and `DEPLOYERS` already named `flyctl`, and this case passed on
+    first run. It exists so a future edit narrowing either one fails here.
+    """
+    assert decide("FLY_DEPLOY_ACK=1 flyctl deploy") == "ask"
 
 
 def test_ack_exported_in_environment_asks():

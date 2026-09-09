@@ -671,3 +671,118 @@ unrunnable."** It is not; it was untried as specified. The failure is the one
 committed while writing notes about a section that says exactly that. Recorded
 because "blocked" and "not yet attempted correctly" are different states, and
 only one of them is an invitation to stop.
+
+## 11. A config snippet for a file that exists is a *merge* instruction
+
+Measured 2026-09-09, as a near-miss rather than a defect.
+
+A task packet supplied a `.claude/settings.json` body containing exactly one
+handler — a new `InstructionsLoaded` logger. The file on disk already carried
+four handlers: `check_invariants.py` and `post_edit_python.py` on PostToolUse,
+and `pre_bash_deploy.py` twice on PreToolUse. Written literally, the snippet
+deletes all four. Silently: JSON has no merge semantics, the result is valid
+JSON, and nothing in the pipeline warns that a gate stopped existing.
+
+The trap is that the snippet was *complete and correct in itself*. Nothing about
+it reads as partial.
+
+HOOKS-REF.md § *Configuration* says hook entries **merge across settings
+levels** — user, project, local. That is a different mechanism, and it offers no
+protection at all against one file being overwritten by hand. Reading it as
+reassurance here would be a category error.
+
+The check, run on both merges that day:
+
+| | PostToolUse | PreToolUse | InstructionsLoaded | PermissionDenied |
+|---|---|---|---|---|
+| before | 2 | 2 | — | — |
+| after `InstructionsLoaded` | 2 | 2 | 1 | — |
+| after `PermissionDenied` | 2 | 2 | 1 | 1 |
+
+Assert per-event handler counts before and after, and fail on any decrease.
+Eyeballing the diff is not the check: the deletion shows up as absence, which is
+exactly what a diff makes easy to skim past.
+
+## 12. `flyctl` on the ack-gate was already covered — a negative result, recorded
+
+Investigated 2026-09-09 on the premise that the gate's dispatch filter was
+`if: "Bash(fly *)"` only, that `flyctl deploy` therefore never reached the hook,
+and that the test payloads were all `fly `-prefixed. All three were false:
+
+| layer | state |
+|---|---|
+| `.claude/settings.json` | two `if` entries — `Bash(fly *)` **and** `Bash(flyctl *)` |
+| `pre_bash_deploy.py` | `DEPLOYERS = {"fly", "flyctl"}` |
+| `pre_bash_deploy.py` | `FALLBACK = r"\bfly(?:ctl)?\s+deploy\b"` |
+| `tests/test_pre_bash_deploy.py` | `"flyctl deploy"` already a parametrized case |
+
+The compound and env-prefixed forms are covered at the `if` layer too, per
+HOOKS-REF.md § *Bash `if` matching*: each subcommand is checked, and leading
+`VAR=value` assignments are stripped before matching. Measured against the
+unmodified gate:
+
+```
+flyctl deploy                    -> deny
+git push && flyctl deploy        -> deny
+FLY_DEPLOY_ACK=1 flyctl deploy   -> ask
+```
+
+Two of those three were nonetheless new *test inputs*, and were added as
+regression pins (15 passed -> 17 passed, all green on first run). Pins, not
+fixes — they exist so a future edit narrowing either layer fails loudly.
+
+Recorded because a discarded negative result is a concern that comes back. The
+next person to notice `Bash(fly *)` in isolation will re-derive the same alarm
+unless the answer is written down.
+
+## 13. First `path_glob_match` against real config — and what silence means
+
+The 2026-09-08 verification of `log_event.py` staged its lazy load: a throwaway
+`.claude/rules/_probe.md` created, fired, and deleted. On 2026-09-09 the repo
+gained its first real conditional rule, `.claude/rules/hook-authoring.md`,
+scoped to two globs. Opening `.claude/hooks/post_edit_python.py`:
+
+```
+load_reason      path_glob_match
+globs            ['.claude/hooks', '.claude/settings*.json']
+trigger_file_path .../.claude/hooks/post_edit_python.py
+```
+
+Two things worth keeping.
+
+**The payload normalises the glob.** The rule's frontmatter says
+`".claude/hooks/**"`; the event reports `.claude/hooks`. Matching is unaffected —
+a file beneath the directory triggered it — but a check that string-compares the
+reported `globs` against the authored frontmatter will disagree for no reason.
+
+**Silence does not mean no match.** Opening `.claude/settings.json` immediately
+afterwards, in the same session, produced **no line at all**. The event fires
+when a file is *loaded into context*, not on every access that matches its glob;
+once loaded, a rule is not re-reported. Confirming the second glob therefore
+required a fresh session (`claude -p`, hooks enabled), which produced
+`path_glob_match ... trigger=settings.json` as its fifth line after the four
+`session_start`/`include` loads.
+
+The instrument answers "did this rule ever load", not "how often did it match".
+Reading a missing line as a broken glob is the available mistake here.
+
+## 14. `PermissionDenied` logger — wired 2026-09-09, UNFIRED
+
+Status, not a finding. `log_event.py` was pointed at `PermissionDenied` on
+2026-09-09 by a settings merge (§11). It has **not** been observed firing.
+
+It cannot be staged cheaply: the event fires only when auto mode actually denies
+a tool call, which needs the classifier to refuse something rather than a
+synthetic payload. Per the calibration in the global `CLAUDE.md`, an
+informational channel whose staged test is expensive earns a passive check
+instead — so this one waits for its first natural firing.
+
+Blast radius if it never fires: a false belief that denials are being recorded.
+Nothing blocks, nothing deploys, no data is lost. That is what makes passive
+acceptable here, and it is the reason the status is written down rather than
+assumed.
+
+**To close:** after a few sessions of ordinary work, grep
+`.claude/metrics/*.jsonl` for `"hook_event_name":"PermissionDenied"`. Record the
+result here either way — a confirmed absence after real denials is a defect
+report, not a non-event.
