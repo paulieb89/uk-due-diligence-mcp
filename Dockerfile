@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir --upgrade pip \
         "httpx==0.28.1" \
         "pydantic==2.13.0" \
         "python-dotenv==1.2.2" \
-        "mcpfleet-obs==0.1.0"
+        "mcpfleet-obs==0.2.0"
 
 # Copy application code
 COPY . .
