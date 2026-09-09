@@ -17,13 +17,14 @@ to this software; the general BOUCH privacy policy is at
 The server is a read-only lookup service. It forwards queries from your AI
 client (Claude, ChatGPT, or any MCP-compatible client) to official UK public
 registers — Companies House, the Charity Commission, The Gazette, HM Land
-Registry, HMRC's VAT register — and to the published OFSI, OFAC, EU, and UN
+Registry — and to the published OFSI, OFAC, EU, and UN
 consolidated sanctions lists, then returns the results.
 
 ## What passes through the service
 
-Your queries may contain personal data — for example a director's name, or a
-sole trader's VAT number. Query results may also contain personal data drawn
+Your queries may contain personal data — for example a director's name, or the
+name of an individual being screened against the sanctions lists. Query results
+may also contain personal data drawn
 from the public registers themselves (officer names, partial dates of birth,
 service addresses). All of this data:
 

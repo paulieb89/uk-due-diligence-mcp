@@ -25,7 +25,6 @@ EXPECTED_MODULES = [
     "disqualified",
     "land_registry",
     "gazette",
-    "hmrc_vat",
     "sanctions",
     "search_fetch",
     "models",

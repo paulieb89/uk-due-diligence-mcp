@@ -4,7 +4,7 @@
 
 **Official-source UK due-diligence data for AI agents.**
 
-Search Companies House, Charity Commission, The Gazette, HMLR price-paid data and HMRC VAT records, plus screen names against the OFSI, OFAC, EU and UN sanctions lists. Exposes atomic MCP tools for company ownership, officers, cross-company appointment history, secured charges, insolvency notices and related registry evidence — the consuming agent decides how to investigate, not the server.
+Search Companies House, Charity Commission, The Gazette and HMLR price-paid data, plus screen names against the OFSI, OFAC, EU and UN sanctions lists. Exposes atomic MCP tools for company ownership, officers, cross-company appointment history, secured charges, insolvency notices and related registry evidence — the consuming agent decides how to investigate, not the server.
 
 Every data source is a legally-mandated register with a free official API. Zero paywalls.
 
@@ -26,7 +26,6 @@ Every data source is a legally-mandated register with a free official API. Zero 
 | Charity Commission | `api.charitycommission.gov.uk` | API key (free) | England & Wales |
 | HMLR Land Registry | `landregistry.data.gov.uk` (SPARQL) | None | England & Wales |
 | The Gazette | `thegazette.co.uk` (Linked Data) | None (read) | UK-wide |
-| HMRC VAT | `api.service.hmrc.gov.uk` | OAuth2 client credentials | UK-wide |
 | OFSI / OFAC / EU / UN sanctions | consolidated list files | None | International |
 
 ---
@@ -99,11 +98,10 @@ See [Configuration](#configuration) for the environment variables it needs.
 | `gazette_insolvency` | Corporate insolvency notices across the Gazette's notice-code taxonomy (codes 2401-2465) |
 | `gazette_notice` | Full legal wording of a specific notice |
 
-**HMRC / Sanctions**
+**Sanctions**
 
 | Tool | Description |
 |------|-------------|
-| `vat_validate` | Trading name + address as registered for VAT |
 | `sanctions_screen` | Screen a name against the OFSI/OFAC/EU/UN consolidated lists |
 
 **Cross-register**
@@ -157,8 +155,6 @@ Things worth knowing before trusting output:
 |----------|--------------|------------------|
 | `CH_API_KEY` | All Companies House tools | [developer.company-information.service.gov.uk](https://developer.company-information.service.gov.uk) — free |
 | `CHARITY_API_KEY` | Charity Commission tools | [api-portal.charitycommission.gov.uk](https://api-portal.charitycommission.gov.uk) — free |
-| `HMRC_CLIENT_ID` / `HMRC_CLIENT_SECRET` | `vat_validate` | HMRC Developer Hub (developer.service.hmrc.gov.uk) — free, OAuth2 client-credentials app |
-| `HMRC_ENV` | `vat_validate` (optional) | `sandbox` or `production` — defaults to `production` |
 
 HMLR, The Gazette, and the sanctions lists require no credentials.
 
@@ -174,7 +170,6 @@ uk-due-diligence-mcp/
 ├── charity.py          # charity_search, charity_profile
 ├── land_registry.py    # land_title_search (SPARQL Price Paid Index)
 ├── gazette.py          # gazette_insolvency, gazette_notice
-├── hmrc_vat.py         # vat_validate (OAuth2 client-credentials)
 ├── sanctions.py        # sanctions_screen (OFSI/OFAC/EU/UN consolidated lists)
 ├── search_fetch.py     # search, fetch (cross-register fan-out)
 ├── models.py           # Pydantic v2 output models

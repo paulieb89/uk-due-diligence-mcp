@@ -37,7 +37,7 @@ async def test_server_docstring_tool_and_resource_counts_are_current(mcp_client)
 
     tools = await mcp_client.list_tools()
     resources = await mcp_client.list_resource_templates()
-    assert len(tools) == 19
+    assert len(tools) == 18
     assert len(resources) == 10
     tool_names = {t.name for t in tools}
     resource_names = {t.name for t in resources}

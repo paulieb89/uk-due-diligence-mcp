@@ -2,27 +2,26 @@
 server.py — uk_due_diligence_mcp
 
 UK Due Diligence MCP server.
-19 tools + 10 resource templates across six official-source registers
-(five public registers plus consolidated sanctions lists).
+18 tools + 10 resource templates across five official-source registers
+(four public registers plus consolidated sanctions lists).
 
 Data sources:
   - Companies House REST API (CH_API_KEY)
   - Charity Commission API (CHARITY_API_KEY)
   - HMLR Land Registry Linked Data (unauthenticated)
   - The Gazette API (unauthenticated)
-  - HMRC VAT Check API (HMRC_CLIENT_ID + HMRC_CLIENT_SECRET, application-restricted)
   - Consolidated sanctions lists: OFSI (UK), OFAC (US), EU, UN (unauthenticated bulk files)
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (19 — all clients including ChatGPT):
+Tools (18 — all clients including ChatGPT):
     company_search, company_profile, company_officers, company_psc,
         officer_appointments, company_charges, company_filing_history,
         company_filing_document
     disqualified_search, disqualified_profile
     charity_search, charity_profile
     gazette_insolvency, gazette_notice
-    land_title_search, vat_validate
+    land_title_search
     sanctions_screen
     search, fetch
 
@@ -76,9 +75,9 @@ mcp = FastMCP(
     instructions=(
         "UK due diligence server covering official government registers plus consolidated "
         "sanctions lists: Companies House, Charity Commission, HMLR Land Registry, The Gazette, "
-        "HMRC VAT, and the OFSI/OFAC/EU/UN sanctions lists. "
+        "and the OFSI/OFAC/EU/UN sanctions lists. "
         "Use company_search to resolve an entity to a company number, and charity_search, "
-        "disqualified_search, gazette_insolvency, vat_validate, and land_title_search to find "
+        "disqualified_search, gazette_insolvency, and land_title_search to find "
         "other entities and notices; use the companion tools (company_profile, company_officers, "
         "company_psc, charity_profile, disqualified_profile, gazette_notice) to fetch full "
         "records. company_officers exposes officer_id on each officer, which can be passed to "
@@ -121,7 +120,7 @@ async def health(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.3.0"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.4.0"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -148,7 +147,6 @@ import charity
 import disqualified
 import land_registry
 import gazette
-import hmrc_vat
 import sanctions
 import search_fetch
 
@@ -158,7 +156,6 @@ charity.register_tools(mcp)
 disqualified.register_tools(mcp)
 land_registry.register_tools(mcp)
 gazette.register_tools(mcp)
-hmrc_vat.register_tools(mcp)
 sanctions.register_tools(mcp)
 search_fetch.register_tools(mcp)
 

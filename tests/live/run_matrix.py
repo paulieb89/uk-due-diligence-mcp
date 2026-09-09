@@ -60,9 +60,6 @@ CASES: list[Case] = [
         chain=lambda p: {"id": (find_first(p, "ids") or ["company:03782379"])[0]},
     ),
     Case("fetch"),
-
-    # ---- hmrc vat ----
-    Case("vat_validate", {"vat_number": "220430231"}),
 ]
 
 
