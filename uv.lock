@@ -605,7 +605,7 @@ wheels = [
 
 [[package]]
 name = "mcpfleet-obs"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
@@ -614,9 +614,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/81/df1334a8d3f1afe67063596f1e4955ab2f6c16fa45331790751587f8e51e/mcpfleet_obs-0.1.0.tar.gz", hash = "sha256:4bdb23ec7dbc3e9ae25bb1a736ae65c1c41b9714e55ea917156c22f012830de4", size = 101470, upload-time = "2026-07-29T12:00:36.346Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/40/8f/8bf1a257d0f5a813219abdb38877422f45ce148931ff69569deb54968cec/mcpfleet_obs-0.2.0.tar.gz", hash = "sha256:21a3b139a33d92253798261371020daa3172c532cc71a34d83f5064a8cc842e7", size = 102516, upload-time = "2026-09-09T17:00:20.439Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/ee/7d54e861cfc3fe485e985a86e7ac8489e1fe66bdb5a4dcee57a08a3ca1ef/mcpfleet_obs-0.1.0-py3-none-any.whl", hash = "sha256:54164b8ff518ae7083b8982b93d4c4f6c51eeebc36bdb293b2aecbbf20d5d622", size = 5506, upload-time = "2026-07-29T12:00:34.952Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/80/713e60366e7e5bc0b4ca49f9501b8d4331a8d762f5511616b069897f2727/mcpfleet_obs-0.2.0-py3-none-any.whl", hash = "sha256:a3e362a3a6356683f42dee422eb5252cc39bf17a104937c4b39ff0ba22110b86", size = 6040, upload-time = "2026-09-09T17:00:19.161Z" },
 ]
 
 [[package]]
@@ -1297,7 +1297,7 @@ requires-dist = [
     { name = "fastmcp", specifier = "==3.2.4" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = "==1.27.0" },
-    { name = "mcpfleet-obs", specifier = ">=0.1.0" },
+    { name = "mcpfleet-obs", specifier = "==0.2.0" },
     { name = "pydantic", specifier = "==2.13.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
 ]

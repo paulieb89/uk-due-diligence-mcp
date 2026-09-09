@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git grep:*), Bash(ls:*), Bash(grep:*), Bash(uv run:*), Read
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git grep:*), Bash(ls:*), Bash(grep:*), Bash(head:*), Bash(tail:*), Bash(sort:*), Bash(uniq:*), Bash(uv run:*), Read
 argument-hint: [focus-area]
 description: Load current repo state - git activity, work in flight, verification status
 ---
@@ -8,17 +8,18 @@ description: Load current repo state - git activity, work in flight, verificatio
 
 ## Git
 - Status: !`git status -sb`
-- Recent: !`git log --oneline -10`
-- Hotspots (30 commits): !`git log --pretty=format: --name-only -30 | sort | uniq -c | sort -rg | head -8`
+- Recent code: !`git log --oneline -8 -- '*.py' '*.toml' '*.json' '*.yml' '*.yaml' 'Dockerfile*' scripts/ .claude/commands/ .claude/rules/`
+- Recent prose: !`git log --oneline -4 -- '*.md' docs/`
+- Hotspots (30 commits): !`git log --pretty=format: --name-only -30 | grep -v '^$' | sort | uniq -c | sort -rg | head -8`
 
 ## Work in flight
-- Repo plans/specs: !`find docs -maxdepth 3 -name "*.md" \( -path "*/plans/*" -o -path "*/specs/*" \) 2>/dev/null | xargs -r ls -t 2>/dev/null | head -5`
-- Backlog (top 3 live): !`grep -m 3 "^- [^~]" docs/BACKLOG.md 2>/dev/null || echo none`
-- Open TODOs: !`out=$(git grep -n "TODO\|FIXME" -- . ':(exclude).claude/commands/prime.md' ':(exclude).claude/hooks/HOOKS-REF.md' ':(exclude)docs/BACKLOG.md' | head -8); [ -n "$out" ] && echo "$out" || echo none`
+- Repo plans (newest first): !`ls -t docs/plans | head -5`
+- Backlog (top 3 live): !`grep -m 3 "^- [^~]" docs/BACKLOG.md`
+- Markers in source (blank = none): !`git grep -n "TODO\|FIXME" -- '*.py' '*.sh' '*.toml' '*.yml' '*.yaml' 'Dockerfile*' | head -8`
 - Uncommitted diff shape: !`git diff HEAD --stat | tail -5`
 
 ## Verification
-- Smoke (deployed): !`uv run --no-sync python scripts/mcp_smoke_test.py --deployed 2>&1 | tail -3`
+- Smoke (deployed): !`uv run --no-sync python scripts/mcp_smoke_test.py --deployed | tail -3`
 
 ## Task
 Read CLAUDE.md if not already in context. If a focus area was given ($ARGUMENTS),

@@ -22,6 +22,29 @@ did not survive reading the page itself. Corrections are inline and marked.
    destroys the only thing this file is for: the record of what was believed and
    why it was wrong.
 
+**Where new information goes — provisional placement, 2026-09-08.** This is a
+note about the `.claude/` directory's own conventions, not an observation about
+the runtime, so by its own routing rule it does not belong in an evidence log.
+It sits here because the directory-level doc that should hold it does not exist
+yet — checked 2026-09-08, `.claude/` contains `commands/`, `hooks/` and
+`settings*.json`, and no README or conventions file. Move this block there when
+that doc lands; it is a placeholder with a forwarding address, not a resident.
+
+> A verified, citable claim about platform or repo behaviour → **FIELD-NOTES**
+> (evidence required — a citation, a measurement, or both). Something small,
+> real and non-blocking → one line in **`docs/BACKLOG.md`**, triaged into a plan
+> when picked up. Anything touching multiple files with a genuine design
+> tradeoff → a plan in **`docs/plans/`**, using `docs/plans/TEMPLATE-handoff.md`.
+> A FIELD-NOTES entry that has stabilised into a permanent constraint, rather
+> than a one-off discovery → **promote it into something that actually runs** —
+> a hook, a `check_invariants.py` check, a committed test — rather than leaving
+> it as prose someone has to remember to reread.
+
+The last clause is the one with no mechanism behind it: nothing currently
+detects a note that has earned promotion, so it stays a habit until something
+enforces it. Filed in `docs/BACKLOG.md` (2026-09-08) as this file's open
+location-and-maturity question.
+
 ---
 
 ## 1. stderr from a hook that exits 0 never reaches the model
@@ -29,12 +52,35 @@ did not survive reading the page itself. Corrections are inline and marked.
 **Believed:** printing to stderr surfaces a warning to Claude even when the hook
 does not block, so a hook could "warn without blocking".
 
-**True:** it does not. Exit-0 stderr goes to the debug log only.
+**True:** it does not. ~~Exit-0 stderr goes to the debug log only.~~ The
+narrow claim survives; the "debug log only" half does not — see AMENDED below.
 
 > "Stderr from a hook that exits 0 goes to the debug log only, never the
 > transcript, and Claude never sees it."
 > — Claude Code Hooks reference, <https://code.claude.com/docs/en/hooks>,
 > accessed 2026-09-07.
+
+### AMENDED 2026-09-08 — where exit-0 stderr actually goes
+
+Ratified amendment, pasted verbatim:
+
+> Exit-0 stderr is not a model-facing channel. Claude never sees it, and the
+> transcript never shows it. Contrary to the Hooks reference, it does not appear
+> in the debug log — verified absent at both default and
+> `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose` on Claude Code 2.1.263, Linux. It is
+> recoverable only from `--output-format stream-json --include-hook-events`,
+> where `hook_response` exposes `stdout`, `stderr`, and `output` as separate
+> fields. Docs-confirmed ≠ verified; this one was docs-confirmed and observed
+> false.
+
+This is the second claim in this section sourced from the reference page and
+found false against the runtime. The first was the corollary retracted below.
+Note what that costs the citation above: it is still what the docs say, and it
+is still wrong in its second clause. A quote is evidence of the documentation,
+never of the behaviour.
+
+The `hook_response` recovery path is independently corroborated here — §10, run
+D — on the same build.
 
 **Transcript-level evidence** (parallel session, 2026-09-07): `hook_success`
 attachments carry the stderr text verbatim in the internal record, but the
@@ -456,6 +502,11 @@ before-and-after rather than two readings taken apart.
 **Verdict.** `additionalContext` works and needs no further proof. §2's "exit 2
 is the only reliable channel" is corrected there.
 
+§10 extends this to the exit-2 path on live traffic and, more usefully, bounds
+the instrument: this section read the *session transcript*, which is not the
+same artifact as a `-p` stream-json stream, and neither one is authoritative for
+a channel it was not asked to emit.
+
 ### The pattern behind both bugs
 
 Two independent files each asserted, in their own prose, that exit-0 stderr
@@ -526,3 +577,212 @@ emitted and dispatched", not "the ask prompt works".
 Do not resolve this by deploying to test it. Prod was healthy at `v1.3.0` when
 this was written and a hand deploy would have shipped 15 unreleased commits — the
 drift the gate exists to prevent. The gap is cheap to hold and expensive to close.
+
+---
+
+## 10. Exit-2 delivery, and what stream-json actually proves
+
+**2026-09-08, Claude Code 2.1.263, Linux.** Four nested `claude -p` runs against
+this repo's live `post_edit_python.py`. Probe: Write `_hookprobe.py` containing
+`import os`, which ruff fails F401, so the hook takes its exit-2 branch. Write
+rather than a heredoc, because the matcher is `Write|Edit|MultiEdit`.
+
+### Exit 2 delivers, measured three times
+
+The model received the diagnostic in all three hooks-enabled runs and quoted it
+back. The delivery envelope, verbatim:
+
+```
+PostToolUse:Write hook blocking error from command: "uv run --no-sync --project
+"$CLAUDE_PROJECT_DIR" python "$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit_python.py"":
+[...]:
+ruff failed on <repo-root>/_hookprobe.py:
+
+F401 [*] `os` imported but unused
+ --> _hookprobe.py:1:8
+```
+
+Note the envelope names the hook and its full command line. §2's exit-2 claim was
+read from the reference; it is now measured on live traffic.
+
+One elision, disclosed: the run printed an absolute path where `<repo-root>`
+stands. `check_invariants.py` rejected this section on its ABSOLUTE PATH rule
+when it was first written — a true positive against new prose, caught on the
+standalone run rather than the hook path, since a `python3` heredoc does not
+match `Write|Edit|MultiEdit`. Everything else in the block is unaltered.
+
+### The instrument correction — check per event type, not per format
+
+Runs A2/B/A3 used `--output-format stream-json --verbose`. In those streams the
+`user` tool_result event read, in full:
+
+```
+"content": "File created successfully at: .../_hookprobe.py"
+```
+
+— while the model demonstrably had the whole ruff diagnostic. The first reading
+of that was "stream-json does not carry hook output". **That is wrong, and the
+error is instructive.** Those runs omitted `--include-hook-events`, so the events
+that carry hook output were never emitted at all. Run D added the flag and got
+them (2 per Write, one per configured handler):
+
+```
+"subtype": "hook_response", "hook_name": "PostToolUse:Write",
+"exit_code": 2, "outcome": "error",
+"output":  "\nruff failed on ...F401...",
+"stderr":  "\nruff failed on ...F401...",
+"stdout":  ""
+```
+
+Keys: `hook_id`, `hook_name`, `hook_event`, `output`, `stdout`, `stderr`,
+`exit_code`, `outcome`. `check_invariants.py`'s handler appears alongside with
+all three text fields `""` and `exit_code: 0` — a silent pass is visible as a
+pass, not as an absence.
+
+**The scope, stated precisely.** A stream-json probe proves what it directly
+captures and nothing beyond it. `tool_result` captures the *tool's* result;
+`hook_response` captures the *hook's*. The earlier UserPromptSubmit probe
+generalised safely only because its evidence *was* the `hook_response` event.
+Here the evidence was the model's subsequent behaviour, and the JSON field was
+silent about something that had plainly happened. Verify per event type; "I read
+the stream and saw nothing" is a claim about the flags passed, not about the
+runtime.
+
+### Negative control — run, after being attempted wrongly twice
+
+Purpose: distinguish *fired and dropped* from *never fired*.
+
+| attempt | result |
+|---|---|
+| `--bare` | unusable — skips the credential path (`Not logged in · Please run /login`), and narrows tools to `Bash`/`Edit`/`Read` |
+| `--settings '{"hooks":{}}'` | hooks still fired |
+| `--settings '{"hooks":{"PostToolUse":[]}}'` | hooks still fired |
+| `--settings '{"disableAllHooks": true}'` | **works** — model reports `NONE`, zero `hook_response` events, probe left dirty |
+
+The two middle rows are not findings. HOOKS-REF.md:278 states hook entries
+**merge** across settings levels rather than replacing each other, so neither
+form could ever have overridden project hooks; :708 names
+`--settings '{"disableAllHooks": true}'` as the documented way to turn hooks off
+for one run "whatever the project's settings say". Both were on the page already.
+
+**This was briefly written up as "the negative control is structurally
+unrunnable."** It is not; it was untried as specified. The failure is the one
+§4's order-of-work names first — read the reference end to end before building —
+committed while writing notes about a section that says exactly that. Recorded
+because "blocked" and "not yet attempted correctly" are different states, and
+only one of them is an invitation to stop.
+
+## 11. A config snippet for a file that exists is a *merge* instruction
+
+Measured 2026-09-09, as a near-miss rather than a defect.
+
+A task packet supplied a `.claude/settings.json` body containing exactly one
+handler — a new `InstructionsLoaded` logger. The file on disk already carried
+four handlers: `check_invariants.py` and `post_edit_python.py` on PostToolUse,
+and `pre_bash_deploy.py` twice on PreToolUse. Written literally, the snippet
+deletes all four. Silently: JSON has no merge semantics, the result is valid
+JSON, and nothing in the pipeline warns that a gate stopped existing.
+
+The trap is that the snippet was *complete and correct in itself*. Nothing about
+it reads as partial.
+
+HOOKS-REF.md § *Configuration* says hook entries **merge across settings
+levels** — user, project, local. That is a different mechanism, and it offers no
+protection at all against one file being overwritten by hand. Reading it as
+reassurance here would be a category error.
+
+The check, run on both merges that day:
+
+| | PostToolUse | PreToolUse | InstructionsLoaded | PermissionDenied |
+|---|---|---|---|---|
+| before | 2 | 2 | — | — |
+| after `InstructionsLoaded` | 2 | 2 | 1 | — |
+| after `PermissionDenied` | 2 | 2 | 1 | 1 |
+
+Assert per-event handler counts before and after, and fail on any decrease.
+Eyeballing the diff is not the check: the deletion shows up as absence, which is
+exactly what a diff makes easy to skim past.
+
+## 12. `flyctl` on the ack-gate was already covered — a negative result, recorded
+
+Investigated 2026-09-09 on the premise that the gate's dispatch filter was
+`if: "Bash(fly *)"` only, that `flyctl deploy` therefore never reached the hook,
+and that the test payloads were all `fly `-prefixed. All three were false:
+
+| layer | state |
+|---|---|
+| `.claude/settings.json` | two `if` entries — `Bash(fly *)` **and** `Bash(flyctl *)` |
+| `pre_bash_deploy.py` | `DEPLOYERS = {"fly", "flyctl"}` |
+| `pre_bash_deploy.py` | `FALLBACK = r"\bfly(?:ctl)?\s+deploy\b"` |
+| `tests/test_pre_bash_deploy.py` | `"flyctl deploy"` already a parametrized case |
+
+The compound and env-prefixed forms are covered at the `if` layer too, per
+HOOKS-REF.md § *Bash `if` matching*: each subcommand is checked, and leading
+`VAR=value` assignments are stripped before matching. Measured against the
+unmodified gate:
+
+```
+flyctl deploy                    -> deny
+git push && flyctl deploy        -> deny
+FLY_DEPLOY_ACK=1 flyctl deploy   -> ask
+```
+
+Two of those three were nonetheless new *test inputs*, and were added as
+regression pins (15 passed -> 17 passed, all green on first run). Pins, not
+fixes — they exist so a future edit narrowing either layer fails loudly.
+
+Recorded because a discarded negative result is a concern that comes back. The
+next person to notice `Bash(fly *)` in isolation will re-derive the same alarm
+unless the answer is written down.
+
+## 13. First `path_glob_match` against real config — and what silence means
+
+The 2026-09-08 verification of `log_event.py` staged its lazy load: a throwaway
+`.claude/rules/_probe.md` created, fired, and deleted. On 2026-09-09 the repo
+gained its first real conditional rule, `.claude/rules/hook-authoring.md`,
+scoped to two globs. Opening `.claude/hooks/post_edit_python.py`:
+
+```
+load_reason      path_glob_match
+globs            ['.claude/hooks', '.claude/settings*.json']
+trigger_file_path .../.claude/hooks/post_edit_python.py
+```
+
+Two things worth keeping.
+
+**The payload normalises the glob.** The rule's frontmatter says
+`".claude/hooks/**"`; the event reports `.claude/hooks`. Matching is unaffected —
+a file beneath the directory triggered it — but a check that string-compares the
+reported `globs` against the authored frontmatter will disagree for no reason.
+
+**Silence does not mean no match.** Opening `.claude/settings.json` immediately
+afterwards, in the same session, produced **no line at all**. The event fires
+when a file is *loaded into context*, not on every access that matches its glob;
+once loaded, a rule is not re-reported. Confirming the second glob therefore
+required a fresh session (`claude -p`, hooks enabled), which produced
+`path_glob_match ... trigger=settings.json` as its fifth line after the four
+`session_start`/`include` loads.
+
+The instrument answers "did this rule ever load", not "how often did it match".
+Reading a missing line as a broken glob is the available mistake here.
+
+## 14. `PermissionDenied` logger — wired 2026-09-09, UNFIRED
+
+Status, not a finding. `log_event.py` was pointed at `PermissionDenied` on
+2026-09-09 by a settings merge (§11). It has **not** been observed firing.
+
+It cannot be staged cheaply: the event fires only when auto mode actually denies
+a tool call, which needs the classifier to refuse something rather than a
+synthetic payload. Per the calibration in the global `CLAUDE.md`, an
+informational channel whose staged test is expensive earns a passive check
+instead — so this one waits for its first natural firing.
+
+Blast radius if it never fires: a false belief that denials are being recorded.
+Nothing blocks, nothing deploys, no data is lost. That is what makes passive
+acceptable here, and it is the reason the status is written down rather than
+assumed.
+
+**To close:** after a few sessions of ordinary work, grep
+`.claude/metrics/*.jsonl` for `"hook_event_name":"PermissionDenied"`. Record the
+result here either way — a confirmed absence after real denials is a defect
+report, not a non-event.

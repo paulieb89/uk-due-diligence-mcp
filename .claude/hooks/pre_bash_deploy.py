@@ -4,7 +4,7 @@
 A manual `fly deploy` ships prod but skips the PyPI publish, so the git tag and
 the PyPI release silently stop describing what is running.
 
-Three outcomes, and the choice of each is load-bearing:
+Four outcomes, and the choice of each is load-bearing:
 
   deploy, no ack -> "deny". The reason is shown to Claude (HOOKS-REF.md:1745),
                     so it names the escape rather than dead-ending.
@@ -17,6 +17,9 @@ Three outcomes, and the choice of each is load-bearing:
                     its reason is shown to the user, which is the right audience
                     for a confirmation.
   anything else  -> silent.
+  crash          -> silent for an unrelated command, exit 2 when the raw payload
+                    mentions a deploy. See main(); an uncaught exception exits 1,
+                    which is non-blocking, so the deploy would otherwise proceed.
 
 There are legitimate reasons to deploy by hand (rollback, a wedged machine).
 FLY_DEPLOY_ACK=1 is the escape, honoured both as a command-string env prefix and
@@ -37,7 +40,7 @@ import sys
 
 ACK_VAR = "FLY_DEPLOY_ACK"
 DEPLOYERS = {"fly", "flyctl"}
-OPERATORS = {"&&", "||", ";", "|", "&", "\n"}
+OPERATORS = {"&&", "||", ";", "|", "&", "\n", "(", ")"}
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
 
 # Fallback only, for a command shlex cannot tokenise. Unanchored and so prone to
@@ -65,8 +68,19 @@ def _segments(command: str) -> list[list[str]] | None:
     Quote-aware so that `echo "a; fly deploy"` stays one token and never looks
     like a second subcommand — splitting the raw string on operators is what let
     prose match in the first place.
+
+    Newline is *declared as punctuation*, not merely dropped from `whitespace`.
+    Dropping it alone glues it into the adjacent word (`'app\\nfly'`); it has to
+    be punctuation to be emitted as its own token. Without that, `cd app\\nfly
+    deploy` lexed to one merged segment whose first token was `cd`, the deployer
+    was never in command position, and a routine multi-line command walked past
+    the gate in silence. `"\\n"` was already in OPERATORS, so the case was
+    intended all along — it was dead code, because the token was never emitted.
+    Nothing failed and nothing warned. Measured 2026-09-09: 69% of one session's
+    Bash calls contained a newline, so this was the majority shape, not an edge.
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars="();<>|&\n")
+    lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
         tokens = list(lexer)
@@ -111,16 +125,31 @@ def _classify(command: str) -> tuple[bool, bool]:
 
 
 def main() -> int:
+    raw = sys.stdin.read()
     try:
-        data = json.load(sys.stdin)
-    except Exception:
+        data = json.loads(raw)
+        if data.get("tool_name") != "Bash":
+            return 0
+        command = (data.get("tool_input") or {}).get("command") or ""
+        is_deploy, acked_in_command = _classify(command)
+    except Exception as exc:
+        # Scoped fail-closed, deliberately not blanket. This hook runs on every
+        # Bash call, so `except Exception: return 2` would wedge the terminal on
+        # any bug in it. Only `json.load` was guarded before, and everything
+        # after it was bare: `json.loads("null")` yields None, `.get` raises,
+        # and an uncaught exception exits 1 — a non-blocking error, so the
+        # deploy proceeded. Low reachability today; the real exposure is a
+        # future edit introducing an exception on the deploy path and failing
+        # open in silence. Same principle as FALLBACK: err closed only where the
+        # command is ambiguous *and* a deploy is in play.
+        if FALLBACK.search(raw):
+            print(
+                f"pre_bash_deploy crashed classifying a possible deploy: {exc}",
+                file=sys.stderr,
+            )
+            return 2
         return 0
 
-    if data.get("tool_name") != "Bash":
-        return 0
-    command = (data.get("tool_input") or {}).get("command") or ""
-
-    is_deploy, acked_in_command = _classify(command)
     if not is_deploy:
         return 0
 

@@ -148,8 +148,11 @@ missed it.
 - No cross-host confirmation yet (ChatGPT, Codex, Eve) — this sweep only
   covers the Claude/Claude-Code column of the interoperability matrix
   originally proposed.
-- No wheel-install/PyPI-artifact test — intentionally out of scope for this
-  staging deploy, relevant once an actual release is cut.
+- No *published*-artifact test. Narrowed 2026-09-09: `tests/test_packaging.py`
+  landed the same day in `6c46f50`, three hours before this sweep was written —
+  it builds the wheel and asserts every first-party module imports from it, so a
+  locally-built wheel is covered. What remains untested is the artifact actually
+  published to PyPI, which only a cut release can exercise.
 - ~~`charity_search` empty-result defect not yet fixed.~~ Fixed — see §3.
 - Composite-task entity-resolution risk (§2): deliberately **not** an MCP
   fix — every tool returned correct source data throughout, so the gap is
