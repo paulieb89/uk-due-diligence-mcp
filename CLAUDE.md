@@ -63,3 +63,15 @@ means "found no disagreement", not "checked everything".
 
 `/verify` (or `uv run --no-sync python scripts/mcp_smoke_test.py --deployed`)
 calls `company_search` against prod and asserts a known-good result.
+
+## Citing the vendored docs
+
+Cite `.claude/hooks/HOOKS-REF.md` and any other vendored reference **by heading,
+never by line number** — line numbers drift silently across doc updates, so a
+stale `:295` still resolves, just to the wrong sentence. A heading survives edits
+above it and fails loudly if renamed.
+
+> **Promote to global.** This is a fleet-wide rule, not a dd one; move it to
+> `~/.claude/CLAUDE.md` when the workbench extends past this repo. Existing
+> line-number citations in `.claude/hooks/*.py` and `FIELD-NOTES.md` predate it
+> and are not yet converted.
