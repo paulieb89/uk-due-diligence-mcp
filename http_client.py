@@ -23,7 +23,6 @@ from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 CH_BASE = "https://api.company-information.service.gov.uk"
 CHARITY_BASE = "https://api.charitycommission.gov.uk/register/api"
 GAZETTE_BASE = "https://www.thegazette.co.uk"
-HMRC_VAT_BASE = "https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup"
 
 # Consolidated sanctions lists. Unlike the other registers these are NOT per-entity
 # query APIs — they are bulk files (CSV/XML, 2-25 MB) fetched whole and indexed by
@@ -164,15 +163,6 @@ def gazette_client() -> httpx.AsyncClient:
     )
 
 
-def hmrc_vat_client() -> httpx.AsyncClient:
-    """HMRC VAT validation — no auth required."""
-    return httpx.AsyncClient(
-        base_url=HMRC_VAT_BASE,
-        headers={"Accept": "application/json"},
-        timeout=10.0,
-    )
-
-
 def sanctions_client() -> httpx.AsyncClient:
     """Streaming client for the bulk consolidated sanctions files.
 
@@ -195,13 +185,11 @@ __all__ = [
     "companies_house_client",
     "charity_client",
     "gazette_client",
-    "hmrc_vat_client",
     "sanctions_client",
     "_request_with_retry",
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",
-    "HMRC_VAT_BASE",
     "OFSI_CONLIST_URL",
     "OFAC_SDN_URL",
     "EU_FSF_URL",

@@ -1168,47 +1168,6 @@ class GazetteInsolvencyResult(BaseModel):
 
 
 # =============================================================================
-# HMRC VAT
-# =============================================================================
-
-
-class VATValidationResult(BaseModel):
-    """HMRC VAT validation result."""
-
-    model_config = BASE_CFG
-
-    valid: bool = Field(
-        ...,
-        description=(
-            "True if HMRC confirmed the VAT number is currently registered. "
-            "False means HMRC returned 404 (not registered / deregistered)."
-        ),
-    )
-    vat_number: str = Field(
-        ...,
-        description="Canonical VAT number in 'GB<9 digits>' format.",
-    )
-    trading_name: str | None = Field(
-        None,
-        description=(
-            "Trading name registered with HMRC for VAT. Compare with the "
-            "Companies House name — discrepancies are a due diligence signal."
-        ),
-    )
-    registered_address: str | None = Field(
-        None,
-        description=(
-            "VAT-registered trading address. May differ from the Companies "
-            "House registered office address."
-        ),
-    )
-    consultation_number: str | None = Field(
-        None,
-        description="HMRC consultation reference number for this lookup.",
-    )
-
-
-# =============================================================================
 # Sanctions / watchlists (consolidated OFSI + OFAC + EU + UN lists)
 # =============================================================================
 

@@ -26,8 +26,7 @@ another user, stop and report rather than exploring further.
 
 The service holds no customer accounts and stores no query data, which
 limits the blast radius of most incident classes. If an incident does affect
-personal or customer data, we will notify affected parties, HMRC (as
-required by the HMRC Developer Hub terms of use), and the ICO within
+personal or customer data, we will notify affected parties and the ICO within
 **72 hours** of becoming aware of it.
 
 ## Supported versions

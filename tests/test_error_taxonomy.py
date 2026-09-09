@@ -6,8 +6,6 @@ ToolErrors (mcpfleet_obs.errors) rather than bare ValueError/RuntimeError,
 so the message survives mask_error_details=True verbatim to the client.
 
 Paths exercised:
-  - vat_validate with a non-UK VAT number -> validation, before any HTTP call
-    (the EU-prefix check happens before the HMRC bearer-token request).
   - company_profile with CH_API_KEY unset -> configuration, before any HTTP
     call (the client factory raises on missing env var before opening a
     connection).
@@ -63,16 +61,6 @@ def _mock_client_factory(handler):
 
 
 class TestErrorTaxonomy:
-    @pytest.mark.asyncio
-    async def test_vat_validate_non_uk_is_validation_error(self, client: Client):
-        with pytest.raises(ToolError) as exc_info:
-            await client.call_tool("vat_validate", {"vat_number": "EE102090374"})
-
-        payload = parse_error_payload(str(exc_info.value))
-        assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
-        assert payload.error_category == "validation"
-        assert payload.is_retryable is False
-
     @pytest.mark.asyncio
     async def test_company_profile_missing_api_key_is_configuration_error(self, client: Client, monkeypatch):
         monkeypatch.delenv("CH_API_KEY", raising=False)
@@ -177,41 +165,6 @@ class TestErrorTaxonomy:
         assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
         assert payload.error_category == "transient"
         assert payload.is_retryable is True
-
-    @pytest.mark.asyncio
-    async def test_vat_validate_upstream_5xx_is_structured_error(self, client: Client, monkeypatch):
-        """C4: hmrc_vat.py's raw VAT-lookup GET call bypassed the taxonomy
-        entirely pre-fix (a bare httpx.HTTPStatusError from
-        resp.raise_for_status() propagated straight out of vat_validate).
-        _get_bearer_token is monkeypatched to skip the HMRC OAuth hop
-        entirely (no real credentials needed); httpx.AsyncClient is
-        monkeypatched so the VAT-lookup GET is served by a MockTransport
-        returning 500 — no real network call anywhere in this test.
-        """
-        import hmrc_vat
-
-        async def fake_token() -> str:
-            return "fake-test-token"
-
-        monkeypatch.setattr(hmrc_vat, "_get_bearer_token", fake_token)
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(500, json={"error": "internal server error"})
-
-        class _FakeAsyncClient(httpx.AsyncClient):
-            def __init__(self, *args, **kwargs):
-                kwargs["transport"] = httpx.MockTransport(handler)
-                super().__init__(*args, **kwargs)
-
-        monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
-
-        with pytest.raises(ToolError) as exc_info:
-            await client.call_tool("vat_validate", {"vat_number": "123456789"})
-
-        payload = parse_error_payload(str(exc_info.value))
-        assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
-        assert payload.error_category == "unknown"
-        assert payload.is_retryable is False
 
     @pytest.mark.asyncio
     async def test_land_title_search_missing_postcode_is_validation_error(self, client: Client):

@@ -1,8 +1,8 @@
 # uk-due-diligence-mcp
 
-FastMCP server over 6 UK registers — Companies House, Charity Commission,
-The Gazette, HMLR Land Registry, HMRC VAT, and OFSI/OFAC/EU/UN sanctions.
-19 tools. Flat layout: `server.py` registers 9 domain modules.
+FastMCP server over 5 UK registers — Companies House, Charity Commission,
+The Gazette, HMLR Land Registry, and OFSI/OFAC/EU/UN sanctions.
+18 tools. Flat layout: `server.py` registers 8 domain modules.
 
 - **GitHub:** `paulieb89/uk-due-diligence-mcp`
 - **Prod:** `https://uk-due-diligence-mcp.fly.dev/mcp`
