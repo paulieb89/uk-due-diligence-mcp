@@ -20,16 +20,16 @@ from typing import Annotated, Any
 
 from pydantic import Field
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from http_client import (
     _request_with_retry,
     companies_house_client,
-    charity_client,
     gazette_client,
 )
-from mcpfleet_obs import raise_tool_error
+from mcpfleet_obs import parse_error_payload, raise_tool_error
 from companies_house import _fetch_company_profile, _normalise_company_number
-from charity import _fetch_charity_profile
+from charity import _fetch_charity_profile, _search_charities
 from disqualified import _fetch_disqualified_profile
 from gazette import _fetch_gazette_notice
 
@@ -49,17 +49,13 @@ async def _company_ids(query: str) -> list[str]:
 
 
 async def _charity_ids(query: str) -> list[str]:
-    async with charity_client() as client:
-        resp = await _request_with_retry(
-            client, "GET", f"/searchCharityName/{query}",
-        )
-    data = resp.json()
-    all_items = data if isinstance(data, list) else []
-    return [
-        f"charity:{item['reg_charity_number']}"
-        for item in all_items[:5]
-        if item.get("reg_charity_number") is not None
-    ]
+    # Delegates to charity.py rather than calling the API directly: only this
+    # register 404s on zero matches (the CH endpoints return 200 with an empty
+    # `items`, Gazette 200 with no `entry` key), and _search_charities already
+    # maps that not_found back to an empty result. A second HTTP path here
+    # drifted from that fix and reported "no charities" as a failed register.
+    result = await _search_charities(query, 0, 5)
+    return [f"charity:{c.charity_number}" for c in result.charities if c.charity_number]
 
 
 async def _disqualified_ids(query: str) -> list[str]:
@@ -100,6 +96,47 @@ async def _gazette_ids(query: str) -> list[str]:
     return ids
 
 
+def _raise_all_registers_failed(query: str, failures: list[tuple[str, Exception]]) -> None:
+    """Every register failed, so there is no result to report — only a cause.
+
+    Re-raises the upstream ToolError rather than synthesising a transient one:
+    the commonest way all four fail at once is an unset CH_API_KEY, which
+    _get_env reports as configuration/not-retryable. Telling a caller to retry
+    that is the same false signal this whole path exists to remove.
+    """
+    payloads = [(label, parse_error_payload(str(exc))) for label, exc in failures
+                if isinstance(exc, ToolError)]
+    if len(payloads) == len(failures):
+        for (_, exc), (_, payload) in zip(failures, payloads, strict=True):
+            if payload is not None and payload.error_category != "not_found":
+                raise exc
+
+    # Mixed or unstructured causes. Name them by type — a ToolError's str() is
+    # already a FleetErrorPayload JSON dump and would nest inside description.
+    detail = "; ".join(f"{label}: {type(exc).__name__}" for label, exc in failures)
+    raise_tool_error(
+        "transient",
+        is_retryable=True,
+        attempted=f"search({query!r})",
+        description=(
+            f"All {len(failures)} registers failed ({detail}) — no register was "
+            f"searched. This is an upstream failure, not a zero-result search."
+        ),
+    )
+
+
+# Labels are the ID prefixes these helpers emit, not register names: the same
+# payload carries `ids` prefixed this way, so a caller can conclude "no charity:
+# IDs and charity in registers_unavailable -> unknown, not absent" without
+# knowing a separate naming scheme.
+_REGISTERS = (
+    ("company", _company_ids),
+    ("charity", _charity_ids),
+    ("disqualification", _disqualified_ids),
+    ("notice", _gazette_ids),
+)
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -124,26 +161,47 @@ def register_tools(mcp: FastMCP) -> None:
         Searches Companies House, Charity Commission, disqualified directors,
         and Gazette insolvency notices in parallel. Returns a list of result
         IDs — use fetch with each ID to retrieve the full record.
+
+        `registers_searched` names the registers that actually answered and
+        `registers_unavailable` those that failed; `is_partial` is true whenever
+        the latter is non-empty. An empty `ids` with `is_partial` true means
+        UNRESOLVED, not "nothing on record". If no register answers at all the
+        call raises rather than returning an empty result.
         """
-        tasks = [
-            _company_ids(query),
-            _charity_ids(query),
-            _disqualified_ids(query),
-            _gazette_ids(query),
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(
+            *(fn(query) for _, fn in _REGISTERS), return_exceptions=True
+        )
 
         ids: list[str] = []
         seen: set[str] = set()
-        for result in results:
+        searched: list[str] = []
+        failures: list[tuple[str, Exception]] = []
+        for (label, _), result in zip(_REGISTERS, results, strict=True):
             if isinstance(result, BaseException):
+                if not isinstance(result, Exception):
+                    # CancelledError/SystemExit — a teardown, not a dead register.
+                    # Re-raising also keeps it out of the `for id_ in result` loop
+                    # below, which is what b3eb9ce's BaseException widening fixed.
+                    # Outer cancellation never lands here: gather(return_exceptions=True)
+                    # re-raises that itself.
+                    raise result
+                failures.append((label, result))
                 continue
+            searched.append(label)
             for id_ in result:
                 if id_ not in seen:
                     seen.add(id_)
                     ids.append(id_)
 
-        return {"ids": ids}
+        if not searched:
+            _raise_all_registers_failed(query, failures)
+
+        return {
+            "ids": ids,
+            "registers_searched": searched,
+            "registers_unavailable": [label for label, _ in failures],
+            "is_partial": bool(failures),
+        }
 
     @mcp.tool(
         name="fetch",

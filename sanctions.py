@@ -45,6 +45,7 @@ from http_client import (
     UN_CONSOLIDATED_URL,
     sanctions_client,
 )
+from mcpfleet_obs import raise_tool_error
 from models import SanctionsHit, SanctionsScreenResult
 
 # ---------------------------------------------------------------------------
@@ -52,6 +53,11 @@ from models import SanctionsHit, SanctionsScreenResult
 # ---------------------------------------------------------------------------
 
 TTL_SECONDS = 24 * 60 * 60  # lists update on designation; a daily refresh is ample
+# After a load that produced nothing there is no index to serve, so every call
+# would otherwise re-download all four bulk lists inside _LOCK. _download_to_temp
+# does not go through _request_with_retry and sanctions_client's read timeout is
+# 120s, so an unbounded retry costs ~8 minutes per caller during an outage.
+FAILURE_COOLDOWN_SECONDS = 5 * 60
 VALID_ENTITY_TYPES = {"person", "entity"}
 
 # A single index entry. Tuples (not dicts/models) keep the index compact on a 256 MB VM.
@@ -67,6 +73,7 @@ _INDEX: dict[str, list[Record]] | None = None
 _AS_AT: str | None = None
 _LOADED_MONO: float | None = None
 _LISTS_OK: list[str] = []
+_FAILED_MONO: float | None = None  # when a build last produced zero lists
 _LOCK = asyncio.Lock()
 
 
@@ -280,6 +287,10 @@ _SOURCES = [
     ("OFSI (UK)", OFSI_CONLIST_URL, _parse_ofsi),
 ]
 
+# Every list this server screens against, loaded or not. Derived, never
+# hand-maintained: a fifth source must not need a second edit here.
+_EXPECTED_LISTS = [label for label, _, _ in _SOURCES]
+
 
 # ---------------------------------------------------------------------------
 # Index build + lazy/TTL cache
@@ -300,6 +311,12 @@ async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
                     continue
                 index.setdefault(key, []).append(rec)
                 count += 1
+            if count == 0:
+                # A national sanctions list is never legitimately empty: a zero
+                # parse means the download or the parser broke, not that nobody
+                # is designated. Withhold the label rather than claim a screen.
+                _log(f"REJECTED {label}: parsed 0 name entries")
+                continue
             ok.append(label)
             _log(f"loaded {label}: {count} name entries")
         except Exception as exc:  # one bad list must not sink the others
@@ -313,25 +330,67 @@ async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
     return index, ok
 
 
+def _fresh(now: float) -> bool:
+    return _INDEX is not None and _LOADED_MONO is not None and (now - _LOADED_MONO) < TTL_SECONDS
+
+
+def _cooling_down(now: float) -> bool:
+    """True while a recent build produced zero lists and there is nothing to serve."""
+    return (
+        _INDEX is None
+        and _FAILED_MONO is not None
+        and (now - _FAILED_MONO) < FAILURE_COOLDOWN_SECONDS
+    )
+
+
+def _raise_no_index() -> None:
+    raise_tool_error(
+        "transient",
+        is_retryable=True,
+        attempted="build sanctions index",
+        description=(
+            "None of the consolidated sanctions lists could be loaded, so no screen "
+            "was performed. This is an upstream failure, not a clean result — do not "
+            "read it as an absence of sanctions."
+        ),
+    )
+
+
 async def get_index() -> tuple[dict[str, list[Record]], str | None, list[str]]:
-    """Return the cached index, rebuilding if empty or older than the TTL."""
-    global _INDEX, _AS_AT, _LOADED_MONO, _LISTS_OK
+    """Return the cached index, rebuilding if empty or older than the TTL.
+
+    Raises rather than returning an empty index: caching a load that produced
+    nothing would serve a clean screen for the whole TTL, outliving the outage
+    that caused it.
+    """
+    global _INDEX, _AS_AT, _LOADED_MONO, _LISTS_OK, _FAILED_MONO
     now = time.monotonic()
-    if _INDEX is not None and _LOADED_MONO is not None and (now - _LOADED_MONO) < TTL_SECONDS:
+    if _fresh(now):
         return _INDEX, _AS_AT, _LISTS_OK
+    if _cooling_down(now):
+        _raise_no_index()
     async with _LOCK:
         now = time.monotonic()
-        if _INDEX is not None and _LOADED_MONO is not None and (now - _LOADED_MONO) < TTL_SECONDS:
+        if _fresh(now):
             return _INDEX, _AS_AT, _LISTS_OK
+        if _cooling_down(now):
+            _raise_no_index()
         index, ok = await _build_index()
-        if not ok and _INDEX is not None:
-            # Every list failed this refresh — keep serving the previous (stale) index.
-            _log("refresh loaded 0 lists; retaining previous index")
-            return _INDEX, _AS_AT, _LISTS_OK
+        if not ok:
+            _FAILED_MONO = time.monotonic()
+            if _INDEX is not None:
+                # Every list failed this refresh — keep serving the previous (stale) index.
+                _log("refresh loaded 0 lists; retaining previous index")
+                return _INDEX, _AS_AT, _LISTS_OK
+            # Nothing to fall back on. Do not cache {} and do not stamp _AS_AT:
+            # a screen that loaded no list is unresolved, not clean.
+            _log("build loaded 0 lists and no previous index exists; refusing to serve")
+            _raise_no_index()
         _INDEX = index
         _LISTS_OK = ok
         _AS_AT = datetime.now(timezone.utc).isoformat()
         _LOADED_MONO = time.monotonic()
+        _FAILED_MONO = None
         return _INDEX, _AS_AT, _LISTS_OK
 
 
@@ -416,19 +475,25 @@ def register_tools(mcp: FastMCP) -> None:
         hit on a common name may be a false positive to disambiguate. This is a
         screening aid, not a compliance determination.
 
-        `lists_screened` reports which of OFSI/OFAC/EU/UN were actually loaded — if
-        any is missing the result is partial. `as_at` is when the lists were last
-        refreshed on this server.
+        `lists_screened` reports which of OFSI/OFAC/EU/UN were actually loaded;
+        `lists_unavailable` names those that were not, and `is_partial` is true
+        whenever it is non-empty. When `is_partial` is true an empty `hits` is
+        UNRESOLVED, not clearance. If no list could be loaded at all the call
+        raises a retryable error rather than returning an empty screen. `as_at`
+        is when the lists were last refreshed on this server.
         """
         index, as_at, lists_ok = await get_index()
         etype = entity_type if entity_type in VALID_ENTITY_TYPES else None
         hits = _screen(index, name, etype)
+        unavailable = [label for label in _EXPECTED_LISTS if label not in lists_ok]
         return SanctionsScreenResult(
             query=name,
             normalized_query=normalize(name),
             entity_type_filter=etype,
             match_count=len(hits),
             lists_screened=lists_ok,
+            lists_unavailable=unavailable,
+            is_partial=bool(unavailable),
             as_at=as_at,
             hits=hits,
         )
