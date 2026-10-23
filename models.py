@@ -1233,9 +1233,28 @@ class SanctionsScreenResult(BaseModel):
     lists_screened: list[str] = Field(
         default_factory=list,
         description=(
-            "Which consolidated lists were loaded and actually screened for this call. "
-            "A list absent here failed to load and was NOT screened — treat the result "
-            "as partial if any of OFSI/OFAC/EU/UN is missing."
+            "Which consolidated lists were fully loaded and actually screened for this "
+            "call. A list absent here was NOT screened — see lists_unavailable. Note a "
+            "list that failed part-way still contributes the entries it had already "
+            "parsed, so a hit's list_source may name a list missing from here; that is "
+            "a real match on a list this server does not consider fully screened, not a "
+            "contradiction."
+        ),
+    )
+    lists_unavailable: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Expected lists that did not load, or loaded to zero records, and so were "
+            "NOT screened. Non-empty means this screen is incomplete: a name on one of "
+            "these lists would not appear in hits. Absence of evidence here is not "
+            "evidence of absence."
+        ),
+    )
+    is_partial: bool = Field(
+        False,
+        description=(
+            "True when any expected list was unavailable. When true, an empty hits "
+            "list must be treated as UNRESOLVED, not as clearance."
         ),
     )
     as_at: str | None = Field(
