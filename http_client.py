@@ -10,10 +10,13 @@ Provides a single httpx.AsyncClient instance per data source with:
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from typing import Any, Optional
 
 import httpx
@@ -152,7 +155,11 @@ def charity_client() -> httpx.AsyncClient:
     )
 
 
-def _urllib_get(url: str, params: Optional[dict[str, Any]]) -> httpx.Response:
+def _urllib_get(
+    url: str,
+    params: Optional[dict[str, Any]],
+    headers: Optional[dict[str, str]] = None,
+) -> httpx.Response:
     """Blocking GET via urllib, returned as an httpx.Response.
 
     thegazette.co.uk answers 403 to httpx and requests from the Fly machine
@@ -164,16 +171,55 @@ def _urllib_get(url: str, params: Optional[dict[str, Any]]) -> httpx.Response:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     request = httpx.Request("GET", url)
     try:
-        with urllib.request.urlopen(url, timeout=20.0) as resp:
-            return httpx.Response(resp.status, content=resp.read(), request=request)
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=20.0) as resp:
+            return httpx.Response(
+                resp.status, content=resp.read(), headers=dict(resp.headers), request=request,
+            )
     except urllib.error.HTTPError as exc:
-        return httpx.Response(exc.code, content=exc.read(), request=request)
+        return httpx.Response(
+            exc.code, content=exc.read(), headers=dict(exc.headers), request=request,
+        )
     except TimeoutError as exc:
         raise httpx.ReadTimeout(str(exc), request=request) from exc
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
             raise httpx.ReadTimeout(str(exc.reason), request=request) from exc
         raise httpx.ConnectError(str(exc.reason), request=request) from exc
+
+
+# Gazette fair-use policy (https://www.thegazette.co.uk/fair-use-policy): at most
+# 5 requests per 10 seconds, and after a 429 wait for Retry-After before sending
+# again. Pacing is process-wide because every Gazette call shares one egress IP.
+# A blocked client fails fast instead of sleeping for the whole Retry-After: the
+# tool returns a retryable error and no request is sent during the window.
+GAZETTE_MAX_REQUESTS = 5
+GAZETTE_WINDOW_SECONDS = 10.0
+GAZETTE_DEFAULT_RETRY_AFTER = 10.0
+_gazette_sent: deque[float] = deque()  # monotonic send times inside the window
+_gazette_blocked_until = 0.0  # monotonic; no Gazette traffic before this
+_gazette_pace_lock = asyncio.Lock()
+
+
+def _gazette_retry_after(headers: httpx.Headers) -> float:
+    """Seconds from a Retry-After header; the HTTP-date form falls back to the default."""
+    try:
+        return max(0.0, float(headers.get("retry-after", "")))
+    except ValueError:
+        return GAZETTE_DEFAULT_RETRY_AFTER
+
+
+async def _gazette_pace() -> None:
+    """Wait for a free slot in the 5-per-10-seconds window, then take it."""
+    async with _gazette_pace_lock:
+        while True:
+            now = time.monotonic()
+            while _gazette_sent and now - _gazette_sent[0] >= GAZETTE_WINDOW_SECONDS:
+                _gazette_sent.popleft()
+            if len(_gazette_sent) < GAZETTE_MAX_REQUESTS:
+                _gazette_sent.append(now)
+                return
+            await asyncio.sleep(GAZETTE_WINDOW_SECONDS - (now - _gazette_sent[0]))
 
 
 class _GazetteClient:
@@ -190,11 +236,28 @@ class _GazetteClient:
         return None
 
     async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        global _gazette_blocked_until
         if method != "GET":
             raise ValueError(f"_GazetteClient only supports GET, got {method}")
         if not url.startswith("http"):
             url = f"{GAZETTE_BASE}{url}"
-        return await asyncio.to_thread(_urllib_get, url, kwargs.get("params"))
+
+        remaining = _gazette_blocked_until - time.monotonic()
+        if remaining > 0:
+            # Still inside a Retry-After window: answer 429 locally, send nothing.
+            return httpx.Response(
+                429,
+                headers={"Retry-After": str(math.ceil(remaining))},
+                request=httpx.Request("GET", url),
+            )
+
+        await _gazette_pace()
+        resp = await asyncio.to_thread(
+            _urllib_get, url, kwargs.get("params"), kwargs.get("headers")
+        )
+        if resp.status_code == 429:
+            _gazette_blocked_until = time.monotonic() + _gazette_retry_after(resp.headers)
+        return resp
 
 
 def gazette_client() -> _GazetteClient:

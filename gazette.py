@@ -13,7 +13,6 @@ from typing import Annotated, Any
 from pydantic import Field
 from fastmcp import FastMCP
 
-import httpx
 from fastmcp.exceptions import ToolError
 from http_client import _request_with_retry, gazette_client
 from mcpfleet_obs import raise_http_tool_error, raise_tool_error
@@ -138,11 +137,17 @@ def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 async def _fetch_gazette_notice(notice_id: str) -> dict:
-    url = f"https://www.thegazette.co.uk/notice/{notice_id.strip()}/data.json?view=linked-data"
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.get(url, headers={"Accept": "application/json"})
-        resp.raise_for_status()
-        return resp.json()
+    # Same transport and error taxonomy as the insolvency search: urllib via
+    # gazette_client (httpx gets 403 from Fly), retries on 429/503, and
+    # structured ToolErrors. The Accept header matters: without it the notice
+    # endpoint answers 429 text/html.
+    async with gazette_client() as client:
+        resp = await _request_with_retry(
+            client, "GET", f"/notice/{notice_id.strip()}/data.json",
+            params={"view": "linked-data"},
+            headers={"Accept": "application/json"},
+        )
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
