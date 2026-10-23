@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any, Optional
 
 import httpx
@@ -149,18 +152,58 @@ def charity_client() -> httpx.AsyncClient:
     )
 
 
-def gazette_client() -> httpx.AsyncClient:
-    """Gazette API — no auth required.
+def _urllib_get(url: str, params: Optional[dict[str, Any]]) -> httpx.Response:
+    """Blocking GET via urllib, returned as an httpx.Response.
 
-    The insolvency search endpoint is sensitive to Accept headers; omitting
-    it lets the server negotiate (returns JSON by default for /data.json paths).
-    follow_redirects=True needed as the Gazette uses redirects on some paths.
+    thegazette.co.uk answers 403 to httpx and requests from the Fly machine
+    (lhr) but 200 to urllib for the same URL (measured 2026-10-23), so the
+    Gazette calls go through the stdlib. Transport failures are re-raised as
+    httpx exceptions so raise_http_tool_error keeps its taxonomy.
     """
-    return httpx.AsyncClient(
-        base_url=GAZETTE_BASE,
-        timeout=20.0,
-        follow_redirects=True,
-    )
+    if params:
+        url = f"{url}?{urllib.parse.urlencode(params)}"
+    request = httpx.Request("GET", url)
+    try:
+        with urllib.request.urlopen(url, timeout=20.0) as resp:
+            return httpx.Response(resp.status, content=resp.read(), request=request)
+    except urllib.error.HTTPError as exc:
+        return httpx.Response(exc.code, content=exc.read(), request=request)
+    except TimeoutError as exc:
+        raise httpx.ReadTimeout(str(exc), request=request) from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise httpx.ReadTimeout(str(exc.reason), request=request) from exc
+        raise httpx.ConnectError(str(exc.reason), request=request) from exc
+
+
+class _GazetteClient:
+    """Async stand-in for httpx.AsyncClient that sends GETs through urllib.
+
+    Exposes only what the Gazette callers use: `request` (via
+    _request_with_retry) and the async context manager.
+    """
+
+    async def __aenter__(self) -> "_GazetteClient":
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        return None
+
+    async def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        if method != "GET":
+            raise ValueError(f"_GazetteClient only supports GET, got {method}")
+        if not url.startswith("http"):
+            url = f"{GAZETTE_BASE}{url}"
+        return await asyncio.to_thread(_urllib_get, url, kwargs.get("params"))
+
+
+def gazette_client() -> _GazetteClient:
+    """Gazette API — no auth required, read-only.
+
+    Backed by urllib rather than httpx; see _urllib_get for why. urllib follows
+    redirects by default, as the old follow_redirects=True client did.
+    """
+    return _GazetteClient()
 
 
 def sanctions_client() -> httpx.AsyncClient:
