@@ -44,6 +44,7 @@ import asyncio
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -123,7 +124,7 @@ async def health(request: Request) -> JSONResponse:
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.4.3"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.5.0"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -180,6 +181,12 @@ GET_STREAM_CAP = 20          # below Fly's soft limit (25) and hard limit (50)
 GET_STREAM_TTL_SECONDS = 300.0   # close each held stream after this long
 GET_STREAM_PING_SECONDS = 25.0   # SSE comment so dead peers are noticed
 GET_STREAM_RETRY_MS = 5000       # SSE retry hint: wait this long before reconnecting
+# "bounded": answer GET /mcp with the capped stream above (current default).
+# "405": let FastMCP answer GET /mcp with its native 405, for testing whether a
+# client copes without the stream. Switch per deployment with `fly secrets set`.
+GET_STREAM_MODE = os.environ.get("GET_STREAM_MODE", "bounded")
+if GET_STREAM_MODE not in ("bounded", "405"):
+    raise SystemExit(f"GET_STREAM_MODE must be 'bounded' or '405', not {GET_STREAM_MODE!r}")
 
 
 class _GetStreamBudget:
@@ -235,6 +242,7 @@ class _HttpGuard:
         ping: float = GET_STREAM_PING_SECONDS,
         retry_ms: int = GET_STREAM_RETRY_MS,
         clock=time.monotonic,
+        mode: str = GET_STREAM_MODE,
     ):
         self.app = app
         self._mcp_path = mcp_path.rstrip(b"/")
@@ -243,6 +251,7 @@ class _HttpGuard:
         self._ping = ping
         self._retry_ms = retry_ms
         self._clock = clock
+        self._mode = mode
 
     @staticmethod
     async def _wait_for_disconnect(receive) -> None:
@@ -291,7 +300,7 @@ class _HttpGuard:
             path = scope.get("path", "").rstrip("/").encode()
             method = scope.get("method", "").upper().encode()
             if path == self._mcp_path:
-                if method == b"GET":
+                if method == b"GET" and self._mode == "bounded":
                     await self._hold_stream(receive, send)
                     return
                 if method == b"DELETE":
@@ -324,6 +333,24 @@ class _AcceptNormalizer:
         await self.app(scope, receive, send)
 
 
+def _run_at_startup(app, startup) -> None:
+    """Run `startup()` as the app's lifespan starts, before it serves requests.
+
+    Starlette 1.x removed `add_event_handler`. The old `hasattr` guard skipped the
+    sanctions warm-up silently on FastMCP 4, so this wraps the lifespan instead
+    and lets any failure stop startup.
+    """
+    inner = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan(scope_app):
+        await startup()
+        async with inner(scope_app) as state:
+            yield state
+
+    app.router.lifespan_context = lifespan
+
+
 def main() -> None:
     """Run the MCP server with streamable HTTP transport."""
     import uvicorn
@@ -340,8 +367,7 @@ def main() -> None:
         stateless_http=True,
     )
     # Warm the sanctions list index on boot (fire-and-forget; lazy-loads otherwise).
-    if hasattr(app, "add_event_handler"):
-        app.add_event_handler("startup", sanctions.warm_cache)
+    _run_at_startup(app, sanctions.warm_cache)
     uvicorn.run(
         _HttpGuard(_AcceptNormalizer(app)),
         host="0.0.0.0",
