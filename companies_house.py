@@ -177,6 +177,18 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     )
 
 
+async def _confirm_company_exists(company_number: str) -> dict[str, Any]:
+    """GET /company/{number}: raises not_found for a company that does not exist.
+
+    Collection endpoints (officers, PSCs, charges) return 200 with an empty list
+    for an unknown company number, which reads as a clean result. Call this only
+    on the empty path, so the happy path costs nothing extra.
+    """
+    async with companies_house_client() as client:
+        resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
+        return resp.json()
+
+
 async def _fetch_company_officers(
     company_number: str, *, include_resigned: bool = False
 ) -> CompanyOfficersResult:
@@ -232,6 +244,8 @@ async def _fetch_company_officers(
             ),
         )
 
+    if not raw_items:
+        await _confirm_company_exists(company_number)  # an empty list must not mean "no such company"
     if not include_resigned:
         raw_items = [o for o in raw_items if not o.get("resigned_on")]
     officers = [
@@ -342,10 +356,14 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
 
     note = None
     if total == 0:
-        note = (
-            "No registrable PSC. Typical for widely-held listed PLCs where "
-            "no single person or entity holds 25%+ of shares or voting rights."
-        )
+        # Raises not_found if the company does not exist. The explanatory note
+        # is for listed PLCs only, so it needs the company type.
+        company = await _confirm_company_exists(company_number)
+        if company.get("type") == "plc":
+            note = (
+                "No registrable PSC. Typical for widely-held listed PLCs where "
+                "no single person or entity holds 25%+ of shares or voting rights."
+            )
     return CompanyPSCResult(
         company_number=company_number,
         total=total,
@@ -530,6 +548,9 @@ async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
                 f"total_count={result_total_count}."
             ),
         )
+
+    if not charges:
+        await _confirm_company_exists(company_number)  # an empty list must not mean "no such company"
 
     return CompanyChargesResult(
         company_number=company_number,
