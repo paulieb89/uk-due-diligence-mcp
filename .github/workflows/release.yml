@@ -40,8 +40,23 @@ jobs:
     needs: publish
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
       - run: flyctl deploy --remote-only --ha=false --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Fail the release if prod does not answer /health after the deploy.
+      - name: Post-deploy health check
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://uk-due-diligence-mcp.fly.dev/health)
+            if [ "$code" = "200" ]; then
+              echo "Health check passed (HTTP $code) on attempt $i"
+              exit 0
+            fi
+            echo "Health check attempt $i: HTTP $code — retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 10 attempts"
+          exit 1
 
