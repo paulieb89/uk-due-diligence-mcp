@@ -8,6 +8,14 @@ name: Deploy Staging
 on:
   push:
     branches: [main]
+  # Manual staging deploy of any branch, for pre-release connector testing.
+  # Prod is unaffected: release.yml deploys prod only from a published release.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to deploy to staging"
+        required: true
+        default: "main"
 
 permissions:
   contents: read
@@ -28,6 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
@@ -61,6 +71,8 @@ jobs:
       url: https://uk-due-diligence-mcp-staging.fly.dev/health
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy to staging
