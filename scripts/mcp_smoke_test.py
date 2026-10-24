@@ -103,6 +103,7 @@ async def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--deployed", action="store_true", help=f"probe {DEPLOYED_URL}")
     mode.add_argument("--local", action="store_true", help="probe the in-process server")
+    mode.add_argument("--url", help="probe another deployment, e.g. the staging /mcp URL")
     parser.add_argument(
         "--expect-company",
         default=EXPECT_COMPANY,
@@ -112,6 +113,8 @@ async def main() -> int:
 
     if args.deployed:
         return await smoke(DEPLOYED_URL, DEPLOYED_URL, args.expect_company)
+    if args.url:
+        return await smoke(args.url, args.url, args.expect_company)
 
     from server import mcp  # noqa: E402 — import cost only paid in --local mode
 

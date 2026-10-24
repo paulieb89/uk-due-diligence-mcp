@@ -40,8 +40,10 @@ Resources (10 noun/identifier — protocol-compliant clients only):
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -115,12 +117,13 @@ mcp = FastMCP(
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    # open_streams: held GET /mcp streams in this process (see _HttpGuard).
+    return JSONResponse({"status": "ok", "open_streams": GET_STREAMS.open})
 
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])
 async def smithery_server_card(request: Request) -> JSONResponse:
-    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.4.2"}})
+    return JSONResponse({"serverInfo": {"name": "uk-due-diligence-mcp", "version": "1.4.3"}})
 
 
 @mcp.custom_route("/.well-known/glama.json", methods=["GET"])
@@ -173,22 +176,115 @@ gazette.register_resources(mcp)
 # Entrypoint
 # ---------------------------------------------------------------------------
 
+GET_STREAM_CAP = 20          # below Fly's soft limit (25) and hard limit (50)
+GET_STREAM_TTL_SECONDS = 300.0   # close each held stream after this long
+GET_STREAM_PING_SECONDS = 25.0   # SSE comment so dead peers are noticed
+GET_STREAM_RETRY_MS = 5000       # SSE retry hint: wait this long before reconnecting
+
+
+class _GetStreamBudget:
+    """Bounds the held-open GET /mcp streams. Admitting past the cap evicts the oldest."""
+
+    def __init__(self, cap: int = GET_STREAM_CAP):
+        self.cap = cap
+        self._streams: dict[int, asyncio.Event] = {}  # insertion order = age
+        self._next_id = 0
+
+    @property
+    def open(self) -> int:
+        return len(self._streams)
+
+    def admit(self) -> tuple[int, asyncio.Event]:
+        if len(self._streams) >= self.cap:
+            oldest = next(iter(self._streams))
+            self._streams.pop(oldest).set()  # its handler closes the stream
+        self._next_id += 1
+        evict = asyncio.Event()
+        self._streams[self._next_id] = evict
+        return self._next_id, evict
+
+    def release(self, stream_id: int) -> None:
+        self._streams.pop(stream_id, None)
+
+
+GET_STREAMS = _GetStreamBudget()
+
+
 class _HttpGuard:
-    """Return a held-open SSE stream for GET /mcp; 405 for DELETE /mcp.
+    """Return a bounded SSE stream for GET /mcp; 405 for DELETE /mcp.
 
     claude.ai probes GET /mcp to establish an SSE stream before sending MCP
     protocol messages via POST. With stateless_http=True FastMCP only registers
-    POST routes, so GET returns 405 — claude.ai treats this as a connection
+    POST routes, so GET would return 405, which claude.ai treats as a connection
     failure even though POST works fine.
 
-    Fix: intercept GET /mcp and return 200 text/event-stream held open until
-    the client disconnects. FastMCP never sees the GET; stateless semantics
-    are preserved. DELETE is rejected (405) — stateless servers have no sessions.
+    So GET /mcp returns 200 text/event-stream. Each stream is capped in number
+    (oldest evicted), expires after GET_STREAM_TTL_SECONDS, and sends an SSE
+    retry hint so conforming clients reconnect on their own schedule. Before
+    this bound, unbounded held streams exhausted Fly's per-machine concurrency
+    limit and stalled the whole app (incident 2026-10-24). FastMCP never sees
+    the GET; stateless semantics are preserved. DELETE is rejected (405).
     """
 
-    def __init__(self, app, mcp_path: bytes = b"/mcp"):
+    def __init__(
+        self,
+        app,
+        mcp_path: bytes = b"/mcp",
+        budget: _GetStreamBudget | None = None,
+        ttl: float = GET_STREAM_TTL_SECONDS,
+        ping: float = GET_STREAM_PING_SECONDS,
+        retry_ms: int = GET_STREAM_RETRY_MS,
+        clock=time.monotonic,
+    ):
         self.app = app
         self._mcp_path = mcp_path.rstrip(b"/")
+        self._budget = budget or GET_STREAMS
+        self._ttl = ttl
+        self._ping = ping
+        self._retry_ms = retry_ms
+        self._clock = clock
+
+    @staticmethod
+    async def _wait_for_disconnect(receive) -> None:
+        # A GET carries an empty request body, so the first message is not the disconnect.
+        while (await receive())["type"] != "http.disconnect":
+            pass
+
+    async def _hold_stream(self, receive, send) -> None:
+        stream_id, evicted = self._budget.admit()
+        disconnect = asyncio.ensure_future(self._wait_for_disconnect(receive))
+        evict_wait = asyncio.ensure_future(evicted.wait())
+        try:
+            await send({"type": "http.response.start", "status": 200, "headers": [
+                (b"content-type", b"text/event-stream"),
+                (b"cache-control", b"no-cache"),
+                (b"connection", b"keep-alive"),
+            ]})
+            await send({"type": "http.response.body",
+                        "body": f"retry: {self._retry_ms}\n\n".encode(), "more_body": True})
+            deadline = self._clock() + self._ttl
+            while True:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    break
+                done, _ = await asyncio.wait(
+                    {disconnect, evict_wait},
+                    timeout=min(self._ping, remaining),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if disconnect in done or evict_wait in done:
+                    break
+                if not done:
+                    await send({"type": "http.response.body",
+                                "body": b": ping\n\n", "more_body": True})
+            # Normal end (expiry or eviction): close the response cleanly.
+            await send({"type": "http.response.body", "body": b"", "more_body": False})
+        except Exception:
+            pass  # the client already went away; nothing left to send
+        finally:
+            disconnect.cancel()
+            evict_wait.cancel()
+            self._budget.release(stream_id)
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "http":
@@ -196,16 +292,7 @@ class _HttpGuard:
             method = scope.get("method", "").upper().encode()
             if path == self._mcp_path:
                 if method == b"GET":
-                    await send({"type": "http.response.start", "status": 200, "headers": [
-                        (b"content-type", b"text/event-stream"),
-                        (b"cache-control", b"no-cache"),
-                        (b"connection", b"keep-alive"),
-                    ]})
-                    await send({"type": "http.response.body", "body": b"", "more_body": True})
-                    while True:
-                        event = await receive()
-                        if event["type"] == "http.disconnect":
-                            break
+                    await self._hold_stream(receive, send)
                     return
                 if method == b"DELETE":
                     from starlette.responses import Response as StarletteResponse
