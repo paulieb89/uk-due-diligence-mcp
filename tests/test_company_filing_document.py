@@ -24,7 +24,7 @@ import pytest
 import pytest_asyncio
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 import companies_house_documents as docs
 from mcpfleet_obs import parse_error_payload
@@ -171,11 +171,13 @@ async def test_direct_resource_read_rejects_malformed_document_id_before_any_req
     monkeypatch.setattr(docs, "companies_house_client", _mock_ch_client_factory(handler))
 
     async with Client(mcp) as c:
-        with pytest.raises(McpError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             await c.read_resource("company-document://abc%2F..%2F..%2Fetc")
 
-    payload = parse_error_payload(str(exc_info.value))
-    assert payload.error_category == "validation"
+    # FastMCP 4 matches the URI template before our handler runs, so the id is
+    # rejected as a resource-not-found. The taxonomy payload is not reached for
+    # this input; what matters is that nothing was sent upstream.
+    assert "Resource not found" in str(exc_info.value)
     assert request_count == 0
 
 
@@ -275,7 +277,7 @@ async def test_tool_returns_resource_link_not_embedded_bytes(monkeypatch):
     resource_links = [c for c in result.content if c.type == "resource_link"]
     assert len(resource_links) == 1
     link = resource_links[0]
-    assert link.uri.scheme == "company-document"
+    assert str(link.uri).startswith("company-document://")  # str in mcp 2.x, AnyUrl in 1.x
     assert link.mimeType == "application/pdf"
     assert link.size == 8
 
@@ -605,7 +607,7 @@ async def test_direct_resource_read_without_mime_type_works_when_unambiguous(mon
 
 @pytest.mark.asyncio
 async def test_direct_resource_read_without_mime_type_errors_when_ambiguous(monkeypatch, mcp_client):
-    """resources/read errors surface client-side as McpError (a JSON-RPC
+    """resources/read errors surface client-side as MCPError (a JSON-RPC
     error), not ToolError (which is specific to tools/call results) —
     confirmed by the actual FastMCP Client behavior, not assumed."""
 
@@ -614,7 +616,7 @@ async def test_direct_resource_read_without_mime_type_errors_when_ambiguous(monk
 
     monkeypatch.setattr(docs, "companies_house_client", _mock_ch_client_factory(ch_handler))
 
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await mcp_client.read_resource("company-document://abc123")
 
     payload = parse_error_payload(str(exc_info.value))
