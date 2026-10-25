@@ -100,7 +100,7 @@ def register_tools(mcp: FastMCP) -> None:
         """Fetch the full Charity Commission profile for a charity number.
 
         Returns trustees, latest income/expenditure, insolvency flags,
-        governing document type, classifications, and countries of operation.
+        classifications, and countries of operation.
         Use charity_search first to find the charity number.
         """
         return await _fetch_charity_profile(charity_number)
@@ -231,7 +231,7 @@ def register_resources(mcp: FastMCP) -> None:
         name="charity_profile",
         description=(
             "Full Charity Commission profile for a charity number: trustees, "
-            "income/expenditure, insolvency flags, governing document, and area of operation."
+            "income/expenditure, insolvency flags, and area of operation."
         ),
         mime_type="application/json",
     )

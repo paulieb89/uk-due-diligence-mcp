@@ -357,7 +357,8 @@ def main() -> None:
     from fastmcp.server.http import create_streamable_http_app
 
     print(
-        f"[uk_due_diligence_mcp] Starting on port {PORT} (streamable HTTP, stateless)",
+        f"[uk_due_diligence_mcp] Starting on port {PORT} (streamable HTTP, stateless, "
+        f"GET_STREAM_MODE={GET_STREAM_MODE})",
         file=sys.stderr,
     )
     app = create_streamable_http_app(

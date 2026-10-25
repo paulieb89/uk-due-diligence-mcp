@@ -727,7 +727,8 @@ def register_tools(mcp: FastMCP) -> None:
         """Search the Companies House register by company name or keyword.
 
         Returns a paginated list of matching companies with name, number,
-        status, SIC codes, incorporation date, and registered address.
+        status, incorporation date, and registered address. SIC codes are not
+        reliably returned by search; use company_profile for SIC codes.
         Use company_profile for the full record once you have the company
         number. Re-call with start_index=start_index+items_per_page to
         fetch the next page.
