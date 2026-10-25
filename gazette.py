@@ -174,8 +174,10 @@ def register_tools(mcp: FastMCP) -> None:
     ) -> dict:
         """Fetch the full legal wording of a Gazette notice by numeric notice ID.
 
-        Returns the complete JSON-LD linked-data record for the notice: parties,
-        legal basis, court, and full text. Use gazette_insolvency first to find
+        Returns the JSON-LD linked-data record for the notice: publisher, notice
+        code, publication date, and the party fields the Gazette supplies. Body
+        text and court are not guaranteed; the Gazette web page has the full
+        wording. Use gazette_insolvency first to find
         notice_numeric_id values.
         """
         return await _fetch_gazette_notice(notice_id)
@@ -209,7 +211,7 @@ def register_tools(mcp: FastMCP) -> None:
         via the notice://{notice_numeric_id} resource.
 
         The Gazette is the official UK public record. A notice here means
-        the event has been formally published and is legally effective.
+        the event has been formally published. This tool does not establish its legal effect.
         """
         entity_name = name or query or entity_name
         if not entity_name:

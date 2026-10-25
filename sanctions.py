@@ -464,7 +464,7 @@ def register_tools(mcp: FastMCP) -> None:
         """Screen a name against the UK (OFSI), US (OFAC), EU and UN consolidated sanctions lists.
 
         Returns every list entry whose primary name or alias matches, with the
-        regime, source reference and listing date. Use it to check whether a
+        regime, source reference and listing date where the source gives one. Use it to check whether a
         counterparty — or its officers / persons with significant control —
         appears on a sanctions list.
 

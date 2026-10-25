@@ -65,8 +65,9 @@ def register_tools(mcp: FastMCP) -> None:
         Query must be an individual's name (e.g. "Richard Howson") — NOT a company
         name, which always returns zero results.
 
-        Returns names, dates of birth, disqualification period snippets, and
-        officer IDs that can be used with disqualified_profile for full details.
+        Returns names, dates of birth, match snippets (often empty), and officer
+        IDs that can be used with disqualified_profile for full details. The
+        disqualification periods come from disqualified_profile.
         """
         query = query or name
         if not query:
