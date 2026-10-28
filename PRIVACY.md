@@ -17,7 +17,7 @@ to this software; the general BOUCH privacy policy is at
 The server is a read-only lookup service. It forwards queries from your AI
 client (Claude, ChatGPT, or any MCP-compatible client) to official UK public
 registers — Companies House, the Charity Commission, The Gazette, HM Land
-Registry — and to the published OFSI, OFAC, EU, and UN
+Registry — and to the published UK (FCDO), OFAC, EU, and UN
 consolidated sanctions lists, then returns the results.
 
 ## What passes through the service
@@ -53,7 +53,7 @@ What we do **not** collect:
 
 ## Sanctions list data
 
-The service periodically downloads the publicly published OFSI, OFAC, EU,
+The service periodically downloads the publicly published UK (FCDO), OFAC, EU,
 and UN consolidated sanctions lists, holds a searchable index of them in
 memory, and deletes the downloaded files immediately after parsing. These
 lists are official government publications; we add nothing to them.

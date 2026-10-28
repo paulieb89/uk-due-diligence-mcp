@@ -14,7 +14,7 @@ Contact: **paul@bouch.dev**.
 
 The server provides read-only, programmatic access to UK public registers —
 Companies House, the Charity Commission, The Gazette, and HM Land
-Registry — and to the published OFSI, OFAC, EU, and UN
+Registry — and to the published UK (FCDO), OFAC, EU, and UN
 consolidated sanctions lists, via the Model Context Protocol (MCP). It is
 provided free of charge, without registration.
 

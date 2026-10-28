@@ -149,16 +149,48 @@ async def _download_to_temp(url: str) -> str:
 # Per-list parsers (each yields Record; parse from disk, clear as we go)
 # ---------------------------------------------------------------------------
 
+# A valid but partial UK file parses cleanly, so the parser also checks its size. The
+# published list is about 6,400 designations. The floor is for a cold load, which has no
+# earlier load in this process to compare against; it sits well below the published count
+# so ordinary delistings do not trip it. Lower it only after a genuine, reviewed shrink.
+FCDO_MIN_DESIGNATIONS = 5000
+# Within one process, a refresh that loses more than this fraction of the last good load
+# is rejected and the previous index is kept. Restarts lose this baseline, so the floor is
+# the only check then.
+FCDO_MAX_DROP_FRACTION = 0.10
+_FCDO_LAST_DESIGNATIONS: int | None = None
+
+
 def _parse_fcdo(path: str) -> Iterator[Record]:
     """FCDO UK Sanctions List XML — <Designation> with UniqueID, Names/Name, IndividualEntityShip.
 
     Keeps the `OFSI (UK)` label: this is the consolidated UK list, now published by FCDO.
     Ships carry no person/entity type, so they map to None and pass both entity filters.
+    Raises ValueError when the document is not a complete export (see the guards above).
     """
-    for _ev, elem in ET.iterparse(path, events=("end",)):
+    global _FCDO_LAST_DESIGNATIONS
+    events = ET.iterparse(path, events=("start", "end"))
+    _, root = next(events)
+    if _local(root.tag) != "Designations":
+        raise ValueError(f"unexpected root element {root.tag!r}; not an FCDO UK Sanctions List")
+    generated = ""
+    seen_ids: set[str] = set()
+    designations = 0
+    for ev, elem in events:
+        if ev != "end":
+            continue
+        if _local(elem.tag) == "DateGenerated":
+            generated = (elem.text or "").strip()
+            continue
         if _local(elem.tag) != "Designation":
             continue
-        ref = _child_text(elem, "UniqueID") or None
+        ref = _child_text(elem, "UniqueID")
+        if not ref:
+            raise ValueError("designation without a UniqueID")
+        if ref in seen_ids:
+            raise ValueError(f"duplicate UniqueID {ref}")
+        seen_ids.add(ref)
+        designations += 1
         kind = _child_text(elem, "IndividualEntityShip")
         etype = "person" if kind == "Individual" else "entity" if kind == "Entity" else None
         regime = _child_text(elem, "RegimeName") or None
@@ -172,6 +204,8 @@ def _parse_fcdo(path: str) -> Iterator[Record]:
                 )).strip()
                 if full:
                     names.append((full, _child_text(n, "NameType").lower() != "primary name"))
+        if not names:
+            raise ValueError(f"designation {ref} has no names")
         # Primary names first, so an identical alias spelling does not take the primary's flag.
         # Dedupe on the exact spelling only, as the other parsers do: case and punctuation
         # variants are distinct list entries, and hit.matched_name must stay the listed name.
@@ -183,6 +217,19 @@ def _parse_fcdo(path: str) -> Iterator[Record]:
             seen.add(full)
             yield Record("OFSI (UK)", full, is_alias, etype, regime, ref, listed_on)
         elem.clear()
+
+    if not generated:
+        raise ValueError("no DateGenerated; not a complete FCDO export")
+    if designations < FCDO_MIN_DESIGNATIONS:
+        raise ValueError(
+            f"only {designations} designations; expected at least {FCDO_MIN_DESIGNATIONS}"
+        )
+    if _FCDO_LAST_DESIGNATIONS and designations < _FCDO_LAST_DESIGNATIONS * (1 - FCDO_MAX_DROP_FRACTION):
+        raise ValueError(
+            f"{designations} designations is more than {FCDO_MAX_DROP_FRACTION:.0%} below the "
+            f"previous load of {_FCDO_LAST_DESIGNATIONS}"
+        )
+    _FCDO_LAST_DESIGNATIONS = designations
 
 
 def _parse_ofac(path: str) -> Iterator[Record]:

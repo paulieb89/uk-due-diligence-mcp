@@ -4,7 +4,7 @@
 
 **Official-source UK due-diligence data for AI agents.**
 
-Search Companies House, Charity Commission, The Gazette and HMLR price-paid data, plus screen names against the OFSI, OFAC, EU and UN sanctions lists. Exposes atomic MCP tools for company ownership, officers, cross-company appointment history, secured charges, insolvency notices and related registry evidence — the consuming agent decides how to investigate, not the server.
+Search Companies House, Charity Commission, The Gazette and HMLR price-paid data, plus screen names against the UK (FCDO), OFAC, EU and UN sanctions lists. Exposes atomic MCP tools for company ownership, officers, cross-company appointment history, secured charges, insolvency notices and related registry evidence — the consuming agent decides how to investigate, not the server.
 
 Every data source is a legally-mandated register with a free official API. Zero paywalls.
 
@@ -26,7 +26,7 @@ Every data source is a legally-mandated register with a free official API. Zero 
 | Charity Commission | `api.charitycommission.gov.uk` | API key (free) | England & Wales |
 | HMLR Land Registry | `landregistry.data.gov.uk` (SPARQL) | None | England & Wales |
 | The Gazette | `thegazette.co.uk` (Linked Data) | None (read) | UK-wide |
-| OFSI / OFAC / EU / UN sanctions | consolidated list files | None | International |
+| UK (FCDO) / OFAC / EU / UN sanctions | consolidated list files | None | International |
 
 ---
 
@@ -102,7 +102,9 @@ See [Configuration](#configuration) for the environment variables it needs.
 
 | Tool | Description |
 |------|-------------|
-| `sanctions_screen` | Screen a name against the OFSI/OFAC/EU/UN consolidated lists |
+| `sanctions_screen` | Screen a name against the UK (FCDO), OFAC, EU and UN consolidated lists |
+
+The UK list is the FCDO UK Sanctions List XML and is reported under the label `OFSI (UK)`. The parser refuses an incomplete export: a file with fewer than 5,000 designations, a drop of more than 10% against the previous load in the same process, a duplicate `UniqueID`, or a missing `DateGenerated` fails the UK list, which is then reported in `lists_unavailable` with `is_partial` true. The floor and drop threshold are constants in `sanctions.py`.
 
 **Cross-register**
 
@@ -170,7 +172,7 @@ uk-due-diligence-mcp/
 ├── charity.py          # charity_search, charity_profile
 ├── land_registry.py    # land_title_search (SPARQL Price Paid Index)
 ├── gazette.py          # gazette_insolvency, gazette_notice
-├── sanctions.py        # sanctions_screen (OFSI/OFAC/EU/UN consolidated lists)
+├── sanctions.py        # sanctions_screen (UK/OFAC/EU/UN consolidated lists)
 ├── search_fetch.py     # search, fetch (cross-register fan-out)
 ├── models.py           # Pydantic v2 output models
 ├── http_client.py      # Shared httpx clients, retry backoff, error formatting

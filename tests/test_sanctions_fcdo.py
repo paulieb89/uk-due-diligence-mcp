@@ -32,6 +32,36 @@ def _fixture_records():
     return list(sanctions._parse_fcdo(str(FIXTURE)))
 
 
+SHIPPED_MIN_DESIGNATIONS = sanctions.FCDO_MIN_DESIGNATIONS
+
+
+def _write_designations(path, n, *, root="Designations", date_generated: str | None = "27/10/2026", ids=None):
+    """A structurally valid FCDO-shaped file with n designations (synthetic names)."""
+    ids = ids if ids is not None else [f"GEN{i:05d}" for i in range(n)]
+    parts = [f'<?xml version="1.0" encoding="utf-8"?>\n<{root}>']
+    if date_generated is not None:
+        parts.append(f"<DateGenerated>{date_generated}</DateGenerated>")
+    for uid in ids:
+        parts.append(
+            "<Designation>"
+            f"<DateDesignated>01/01/2020</DateDesignated><UniqueID>{uid}</UniqueID>"
+            "<Names><Name><Name6>SYNTHETIC ENTITY</Name6><NameType>Primary Name</NameType></Name></Names>"
+            "<RegimeName>Synthetic Regime</RegimeName>"
+            "<IndividualEntityShip>Entity</IndividualEntityShip>"
+            "</Designation>"
+        )
+    parts.append(f"</{root}>")
+    path.write_text("".join(parts), encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def fixture_sized_guards(monkeypatch):
+    """Fixture files are tiny, so the cold-load floor is lowered; the real file uses the shipped floor."""
+    monkeypatch.setattr(sanctions, "FCDO_MIN_DESIGNATIONS", 1)
+    monkeypatch.setattr(sanctions, "_FCDO_LAST_DESIGNATIONS", None)
+
+
 @pytest.fixture(autouse=True)
 def reset_index(monkeypatch):
     monkeypatch.setattr(sanctions, "_INDEX", None)
@@ -136,10 +166,72 @@ def test_ship_entries_are_not_excluded_by_the_entity_type_filter():
         assert [h.reference for h in hits] == ["SYN0003"]
 
 
-def test_document_without_designations_yields_nothing(tmp_path):
+def test_document_without_designations_is_rejected(tmp_path):
     empty = tmp_path / "empty.xml"
     empty.write_text('<?xml version="1.0" encoding="utf-8"?><Designations/>', encoding="utf-8")
-    assert list(sanctions._parse_fcdo(str(empty))) == []
+    with pytest.raises(ValueError):
+        list(sanctions._parse_fcdo(str(empty)))
+
+
+def test_wrong_root_element_is_rejected(tmp_path):
+    p = _write_designations(tmp_path / "root.xml", 3, root="Sanctions")
+    with pytest.raises(ValueError, match="root"):
+        list(sanctions._parse_fcdo(str(p)))
+
+
+def test_missing_date_generated_is_rejected(tmp_path):
+    p = _write_designations(tmp_path / "nodate.xml", 3, date_generated=None)
+    with pytest.raises(ValueError, match="DateGenerated"):
+        list(sanctions._parse_fcdo(str(p)))
+
+
+def test_duplicate_unique_id_is_rejected(tmp_path):
+    p = _write_designations(tmp_path / "dup.xml", 3, ids=["GEN00001", "GEN00002", "GEN00001"])
+    with pytest.raises(ValueError, match="duplicate"):
+        list(sanctions._parse_fcdo(str(p)))
+
+
+def test_cold_load_below_the_floor_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(sanctions, "FCDO_MIN_DESIGNATIONS", 10)
+    with pytest.raises(ValueError, match="designations"):
+        list(sanctions._parse_fcdo(str(_write_designations(tmp_path / "nine.xml", 9))))
+    assert len(list(sanctions._parse_fcdo(str(_write_designations(tmp_path / "ten.xml", 10))))) == 10
+
+
+def test_refresh_dropping_more_than_the_allowed_fraction_is_rejected(monkeypatch, tmp_path):
+    monkeypatch.setattr(sanctions, "_FCDO_LAST_DESIGNATIONS", 100)
+    with pytest.raises(ValueError, match="previous"):
+        list(sanctions._parse_fcdo(str(_write_designations(tmp_path / "89.xml", 89))))
+
+
+def test_refresh_at_the_allowed_fraction_and_growth_are_accepted(monkeypatch, tmp_path):
+    monkeypatch.setattr(sanctions, "_FCDO_LAST_DESIGNATIONS", 100)
+    assert len(list(sanctions._parse_fcdo(str(_write_designations(tmp_path / "90.xml", 90))))) == 90
+    monkeypatch.setattr(sanctions, "_FCDO_LAST_DESIGNATIONS", 100)
+    assert len(list(sanctions._parse_fcdo(str(_write_designations(tmp_path / "150.xml", 150))))) == 150
+
+
+def test_successful_parse_records_the_count_for_the_next_refresh(tmp_path):
+    list(sanctions._parse_fcdo(str(_write_designations(tmp_path / "twelve.xml", 12))))
+    assert sanctions._FCDO_LAST_DESIGNATIONS == 12
+
+
+def test_guard_rejection_makes_the_uk_list_unavailable_not_partially_indexed(monkeypatch, tmp_path):
+    """A half-size UK file must not reach the index, and the UK list must be reported unavailable."""
+    monkeypatch.setattr(sanctions, "FCDO_MIN_DESIGNATIONS", 10)
+    half = _write_designations(tmp_path / "half.xml", 6)
+    monkeypatch.setattr(sanctions, "_SOURCES", [("OFSI (UK)", "u1", sanctions._parse_fcdo)])
+    monkeypatch.setattr(sanctions, "_EXPECTED_LISTS", ["OFSI (UK)"])
+
+    async def download_half(_url):
+        return str(half)
+
+    monkeypatch.setattr(sanctions, "_download_to_temp", download_half)
+
+    index, ok = asyncio.run(sanctions._build_index())
+
+    assert ok == []
+    assert not any(r.source == "OFSI (UK)" for recs in index.values() for r in recs)
 
 
 def test_truncated_download_raises_instead_of_parsing_short(tmp_path):
@@ -247,7 +339,9 @@ async def test_partial_refresh_reports_the_failed_uk_list_unavailable(monkeypatc
 
 
 @pytest.mark.skipif(not REAL_XML, reason="set FCDO_UK_SANCTIONS_XML to a downloaded copy of the FCDO XML")
-def test_real_fcdo_file_loads_every_designation_and_name_without_loss():
+def test_real_fcdo_file_loads_every_designation_and_name_without_loss(monkeypatch):
+    monkeypatch.setattr(sanctions, "FCDO_MIN_DESIGNATIONS", SHIPPED_MIN_DESIGNATIONS)
+    monkeypatch.setattr(sanctions, "_FCDO_LAST_DESIGNATIONS", None)
     expected_types: dict[str, str] = {}
     expected_names: set[tuple[str, str]] = set()
     for _, el in ET.iterparse(str(REAL_XML), events=("end",)):
