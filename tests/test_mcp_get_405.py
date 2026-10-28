@@ -5,7 +5,6 @@ the clients tested handshake, discover tools and call them with a native 405. Th
 Accept normaliser is kept as a separate concern and is exercised here too.
 """
 
-import pytest
 from fastmcp.server.http import create_streamable_http_app
 from starlette.testclient import TestClient
 
