@@ -2,7 +2,7 @@
 Consolidated sanctions screening (1 tool: sanctions_screen).
 
 Screens a name against four official consolidated lists:
-  - OFSI (UK, HM Treasury)   ConList.csv     — CSV
+  - UK  (FCDO UK Sanctions List) XML        — XML (label "OFSI (UK)")
   - OFAC (US Treasury)       SDN.XML         — XML
   - EU  (FSF)                full list       — XML
   - UN  (Security Council)   consolidated    — XML
@@ -23,7 +23,6 @@ a screening aid, not a compliance clearance.
 from __future__ import annotations
 
 import asyncio
-import csv
 import os
 import re
 import sys
@@ -40,8 +39,8 @@ from fastmcp import FastMCP
 
 from http_client import (
     EU_FSF_URL,
+    FCDO_UK_SANCTIONS_URL,
     OFAC_SDN_URL,
-    OFSI_CONLIST_URL,
     UN_CONSOLIDATED_URL,
     sanctions_client,
 )
@@ -150,40 +149,40 @@ async def _download_to_temp(url: str) -> str:
 # Per-list parsers (each yields Record; parse from disk, clear as we go)
 # ---------------------------------------------------------------------------
 
-def _parse_ofsi(path: str) -> Iterator[Record]:
-    """OFSI ConList.csv — line 1 is 'Last Updated,<date>', line 2 the header."""
-    with open(path, encoding="utf-8-sig", errors="replace") as fh:
-        reader = csv.reader(fh)
-        next(reader, None)  # "Last Updated,<date>"
-        header = next(reader, None)
-        if not header:
-            return
-        col = {h.strip(): i for i, h in enumerate(header)}
+def _parse_fcdo(path: str) -> Iterator[Record]:
+    """FCDO UK Sanctions List XML — <Designation> with UniqueID, Names/Name, IndividualEntityShip.
 
-        def g(row: list[str], name: str) -> str:
-            i = col.get(name)
-            return row[i].strip() if i is not None and i < len(row) else ""
+    Keeps the `OFSI (UK)` label: this is the consolidated UK list, now published by FCDO.
+    Ships carry no person/entity type, so they map to None and pass both entity filters.
+    """
+    for _ev, elem in ET.iterparse(path, events=("end",)):
+        if _local(elem.tag) != "Designation":
+            continue
+        ref = _child_text(elem, "UniqueID") or None
+        kind = _child_text(elem, "IndividualEntityShip")
+        etype = "person" if kind == "Individual" else "entity" if kind == "Entity" else None
+        regime = _child_text(elem, "RegimeName") or None
+        listed_on = _iso_date(_child_text(elem, "DateDesignated"))
 
-        for row in reader:
-            if not row:
+        names: list[tuple[str, bool]] = []
+        for block in _children(elem, "Names"):
+            for n in _children(block, "Name"):
+                full = _WS_RE.sub(" ", " ".join(
+                    _child_text(n, f"Name{k}") for k in range(1, 7)
+                )).strip()
+                if full:
+                    names.append((full, _child_text(n, "NameType").lower() != "primary name"))
+        # Primary names first, so an identical alias spelling does not take the primary's flag.
+        # Dedupe on the exact spelling only, as the other parsers do: case and punctuation
+        # variants are distinct list entries, and hit.matched_name must stay the listed name.
+        names.sort(key=lambda t: t[1])
+        seen: set[str] = set()
+        for full, is_alias in names:
+            if full in seen:
                 continue
-            full = " ".join(g(row, f"Name {k}") for k in range(1, 7)).strip()
-            full = _WS_RE.sub(" ", full)
-            if not full:
-                continue
-            gtype = g(row, "Group Type")
-            etype = "person" if gtype == "Individual" else "entity" if gtype == "Entity" else None
-            alias_type = g(row, "Alias Type").lower()
-            is_alias = alias_type not in ("", "primary name")
-            yield Record(
-                "OFSI (UK)",
-                full,
-                is_alias,
-                etype,
-                g(row, "Regime") or None,
-                g(row, "Group ID") or None,
-                _iso_date(g(row, "Listed On") or g(row, "UK Sanctions List Date Designated")),
-            )
+            seen.add(full)
+            yield Record("OFSI (UK)", full, is_alias, etype, regime, ref, listed_on)
+        elem.clear()
 
 
 def _parse_ofac(path: str) -> Iterator[Record]:
@@ -279,12 +278,12 @@ def _parse_un(path: str) -> Iterator[Record]:
         elem.clear()
 
 
-# (label, url, parser) — order chosen so the big XML lists stream before OFSI's CSV load.
+# (label, url, parser)
 _SOURCES = [
     ("OFAC (US)", OFAC_SDN_URL, _parse_ofac),
     ("EU", EU_FSF_URL, _parse_eu),
     ("UN", UN_CONSOLIDATED_URL, _parse_un),
-    ("OFSI (UK)", OFSI_CONLIST_URL, _parse_ofsi),
+    ("OFSI (UK)", FCDO_UK_SANCTIONS_URL, _parse_fcdo),
 ]
 
 # Every list this server screens against, loaded or not. Derived, never
@@ -295,6 +294,15 @@ _EXPECTED_LISTS = [label for label, _, _ in _SOURCES]
 # ---------------------------------------------------------------------------
 # Index build + lazy/TTL cache
 # ---------------------------------------------------------------------------
+
+def _drop_source(index: dict[str, list[Record]], label: str) -> None:
+    for key in list(index):
+        kept = [r for r in index[key] if r.source != label]
+        if kept:
+            index[key] = kept
+        else:
+            del index[key]
+
 
 async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
     """Fetch + parse every list into a normalised-name index. Best-effort per list."""
@@ -321,6 +329,8 @@ async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
             _log(f"loaded {label}: {count} name entries")
         except Exception as exc:  # one bad list must not sink the others
             _log(f"FAILED to load {label}: {type(exc).__name__}: {exc}")
+            # Records parsed before the failure must not screen as if the list loaded.
+            _drop_source(index, label)
         finally:
             if path and os.path.exists(path):
                 try:
@@ -477,15 +487,17 @@ def register_tools(mcp: FastMCP) -> None:
 
         `lists_screened` reports which of OFSI/OFAC/EU/UN were actually loaded;
         `lists_unavailable` names those that were not, and `is_partial` is true
-        whenever it is non-empty. When `is_partial` is true an empty `hits` is
-        UNRESOLVED, not clearance. If no list could be loaded at all the call
-        raises a retryable error rather than returning an empty screen. `as_at`
-        is when the lists were last refreshed on this server.
+        whenever it is non-empty or the lists are a previous load that could not
+        be refreshed (`as_at` then shows when they were loaded). When `is_partial`
+        is true an empty `hits` is UNRESOLVED, not clearance. If no list could be
+        loaded at all the call raises a retryable error rather than returning an
+        empty screen. `as_at` is when the lists were last refreshed on this server.
         """
         index, as_at, lists_ok = await get_index()
         etype = entity_type if entity_type in VALID_ENTITY_TYPES else None
         hits = _screen(index, name, etype)
         unavailable = [label for label in _EXPECTED_LISTS if label not in lists_ok]
+        stale = not _fresh(time.monotonic())
         return SanctionsScreenResult(
             query=name,
             normalized_query=normalize(name),
@@ -493,7 +505,7 @@ def register_tools(mcp: FastMCP) -> None:
             match_count=len(hits),
             lists_screened=lists_ok,
             lists_unavailable=unavailable,
-            is_partial=bool(unavailable),
+            is_partial=bool(unavailable) or stale,
             as_at=as_at,
             hits=hits,
         )

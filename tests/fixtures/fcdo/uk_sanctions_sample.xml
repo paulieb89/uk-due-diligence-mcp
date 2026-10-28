@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Synthetic fixture with the element structure of the FCDO UK Sanctions List XML.
+     Names are invented; do not screen against them. The real file is covered by
+     the integration test, which reads FCDO_UK_SANCTIONS_XML. -->
+<Designations xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <DateGenerated>27/10/2026</DateGenerated>
+  <Designation>
+    <LastUpdated>04/08/2026</LastUpdated>
+    <DateDesignated>29/06/2012</DateDesignated>
+    <UniqueID>SYN0001</UniqueID>
+    <Names>
+      <Name>
+        <Name6>ACME TRADING LTD</Name6>
+        <NameType>Primary Name</NameType>
+      </Name>
+      <Name>
+        <Name6>ACME TRADING LIMITED</Name6>
+        <NameType>Alias</NameType>
+      </Name>
+      <Name>
+        <Name6>Acme Trading Ltd</Name6>
+        <NameType>Alias</NameType>
+      </Name>
+      <Name>
+        <Name6>ACME TRADING LIMITED</Name6>
+        <NameType>Alias</NameType>
+      </Name>
+    </Names>
+    <RegimeName>Synthetic Regime (Sanctions) Regulations 2020</RegimeName>
+    <IndividualEntityShip>Entity</IndividualEntityShip>
+    <DesignationSource>UN</DesignationSource>
+  </Designation>
+  <Designation>
+    <LastUpdated>01/02/2026</LastUpdated>
+    <DateDesignated>25/01/2001</DateDesignated>
+    <UniqueID>SYN0002</UniqueID>
+    <Names>
+      <Name>
+        <Name1>IVAN</Name1>
+        <Name2>EXAMPLE</Name2>
+        <NameType>Primary Name</NameType>
+      </Name>
+      <Name>
+        <Name1>IVAN</Name1>
+        <Name2>EXAMPLEV</Name2>
+        <NameType>Primary Name Variation</NameType>
+      </Name>
+      <Name>
+        <Name1>I. EXAMPLE</Name1>
+        <NameType>ALias</NameType>
+      </Name>
+    </Names>
+    <RegimeName>Synthetic Regime (Sanctions) Regulations 2020</RegimeName>
+    <IndividualEntityShip>Individual</IndividualEntityShip>
+    <DesignationSource>UK</DesignationSource>
+  </Designation>
+  <Designation>
+    <LastUpdated>03/10/2017</LastUpdated>
+    <DateDesignated>03/10/2017</DateDesignated>
+    <UniqueID>SYN0003</UniqueID>
+    <Names>
+      <Name>
+        <Name6>PETREL TEST 8</Name6>
+        <NameType>Primary name</NameType>
+      </Name>
+      <Name>
+        <Name6>JAL VAHINI TEST</Name6>
+        <NameType>Alias</NameType>
+      </Name>
+      <Name>
+        <Name6>Jal_Vahini Test</Name6>
+        <NameType>Alias</NameType>
+      </Name>
+    </Names>
+    <RegimeName>Synthetic Regime (Sanctions) Regulations 2019</RegimeName>
+    <IndividualEntityShip>Ship</IndividualEntityShip>
+    <DesignationSource>UK</DesignationSource>
+  </Designation>
+  <Designation>
+    <LastUpdated>12/05/2024</LastUpdated>
+    <DateDesignated>12/05/2024</DateDesignated>
+    <UniqueID>SYN0004</UniqueID>
+    <Names>
+      <Name>
+        <Name1>JANE</Name1>
+        <Name2>SAMPLE</Name2>
+        <Name3>DOE</Name3>
+        <NameType>Primary Name</NameType>
+      </Name>
+    </Names>
+    <RegimeName>Synthetic Regime (Sanctions) Regulations 2024</RegimeName>
+    <IndividualEntityShip>Individual</IndividualEntityShip>
+    <DesignationSource>UK</DesignationSource>
+  </Designation>
+</Designations>
