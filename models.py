@@ -1200,7 +1200,7 @@ class SanctionsHit(BaseModel):
     reference: str | None = Field(
         None,
         description=(
-            "The source's own reference for the listing (OFSI Group ID, OFAC uid, "
+            "The source's own reference for the listing (FCDO Unique ID, OFAC uid, "
             "EU reference number, or UN reference number)."
         ),
     )
@@ -1253,8 +1253,9 @@ class SanctionsScreenResult(BaseModel):
     is_partial: bool = Field(
         False,
         description=(
-            "True when any expected list was unavailable. When true, an empty hits "
-            "list must be treated as UNRESOLVED, not as clearance."
+            "True when any expected list was unavailable, or when the lists are a "
+            "previous load that could not be refreshed (see as_at). When true, an "
+            "empty hits list must be treated as UNRESOLVED, not as clearance."
         ),
     )
     as_at: str | None = Field(

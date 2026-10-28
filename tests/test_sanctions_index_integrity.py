@@ -255,16 +255,3 @@ async def test_failed_build_is_not_retried_until_the_cooldown_expires(monkeypatc
     with pytest.raises(ToolError):
         await sanctions.get_index()
     assert attempts["n"] == 1, "second call inside the cooldown must not re-download"
-
-
-def test_ofsi_parser_yields_nothing_for_a_header_only_file(tmp_path):
-    """Justifies the count==0 rule: a truncated OFSI download parses, silently empty.
-
-    The XML parsers raise ET.ParseError on a truncated body, but the CSV one does
-    not — it reads a header and stops, which is indistinguishable from a real
-    upstream response until you count the records.
-    """
-    path = tmp_path / "conlist.csv"
-    path.write_text("Last Updated,01/01/2026\nName 1,Name 2,Name 3,Name 4,Name 5,Name 6,Listed On\n")
-
-    assert list(sanctions._parse_ofsi(str(path))) == []

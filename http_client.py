@@ -34,7 +34,8 @@ GAZETTE_BASE = "https://www.thegazette.co.uk"
 # query APIs — they are bulk files (CSV/XML, 2-25 MB) fetched whole and indexed by
 # sanctions.py. No auth: the EU list carries a fixed public token in the URL; the UN
 # list 302-redirects to a time-limited blob (hence follow_redirects on the client).
-OFSI_CONLIST_URL = "https://ofsistorage.blob.core.windows.net/publishlive/2022format/ConList.csv"
+# The UK list is the FCDO UK Sanctions List: OFSI's ConList endpoint now returns 409.
+FCDO_UK_SANCTIONS_URL = "https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml"
 OFAC_SDN_URL = "https://sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN.XML"
 EU_FSF_URL = "https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw"
 UN_CONSOLIDATED_URL = "https://scsanctions.un.org/resources/xml/en/consolidated.xml"
@@ -296,7 +297,7 @@ __all__ = [
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",
-    "OFSI_CONLIST_URL",
+    "FCDO_UK_SANCTIONS_URL",
     "OFAC_SDN_URL",
     "EU_FSF_URL",
     "UN_CONSOLIDATED_URL",
