@@ -73,6 +73,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+      - id: resolve
+        # github.sha is the workflow definition's commit (main on a manual dispatch),
+        # not the code being deployed. Label with the commit actually checked out.
+        name: Resolve checked-out commit
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "checked_out_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "Deploying commit ${sha} (ref: ${{ inputs.ref || github.ref }})"
       - uses: superfly/flyctl-actions/setup-flyctl@1.6
 
       - name: Deploy to staging
@@ -83,7 +91,7 @@ jobs:
             --remote-only \
             --ha=false \
             --wait-timeout 300 \
-            --image-label "${{ github.sha }}"
+            --image-label "${{ steps.resolve.outputs.checked_out_sha }}"
 
       - name: Post-deploy health check
         run: |
@@ -104,8 +112,8 @@ jobs:
         run: |
           {
             echo "### Staging deploy"
-            echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Image label: \`${{ github.sha }}\`"
+            echo "- Commit: \`${{ steps.resolve.outputs.checked_out_sha }}\`"
+            echo "- Image label: \`${{ steps.resolve.outputs.checked_out_sha }}\`"
             echo "- App: uk-due-diligence-mcp-staging"
             echo "- URL: https://uk-due-diligence-mcp-staging.fly.dev"
           } >> "$GITHUB_STEP_SUMMARY"
