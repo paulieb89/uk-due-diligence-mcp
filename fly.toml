@@ -29,7 +29,10 @@ primary_region = "lhr"  # London — closest to CH/Gazette APIs
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  # 256 MB left ~21 MB free in steady state and was OOM-killed on 2026-11-02
+  # (exit 137, oom_killed=true). Applied live with `flyctl scale memory 512`; this
+  # keeps the next deploy from shrinking it back.
+  memory = "512mb"
 
 [metrics]
   port = 8080
