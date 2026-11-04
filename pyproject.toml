@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "uk-due-diligence-mcp"
-version = "1.6.0"
+version = "1.6.1"
 description = "UK due diligence MCP server — Companies House, Charity Commission, HMLR, Gazette, sanctions"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -29,7 +29,7 @@ dependencies = [
     "httpx==0.28.1",
     "pydantic==2.13.0",
     "python-dotenv==1.2.2",
-    "mcpfleet-obs==0.4.0",
+    "mcpfleet-obs==0.4.1",
 ]
 
 [project.urls]
