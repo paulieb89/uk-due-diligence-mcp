@@ -718,7 +718,7 @@ wheels = [
 
 [[package]]
 name = "mcpfleet-obs"
-version = "0.4.0"
+version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
@@ -727,9 +727,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "starlette" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/5f/05b141b2d10599a1bf053ddc96be0e2f17f45a932a92be76913b8b2284df/mcpfleet_obs-0.4.0.tar.gz", hash = "sha256:7fd7a629d5b4e2554a90675e8be098ca6a169738046486bcc9925c0834235566", size = 107842, upload-time = "2026-10-24T22:08:39.12Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/40/19/859df0f9e2d2f2800b4d41e52f8140bcf49a69b2901597096a0de26ba83e/mcpfleet_obs-0.4.1.tar.gz", hash = "sha256:85fb3312897c5388aadd3f8ba74ad321962b13abae0670a959e2716e797f6387", size = 108653, upload-time = "2026-11-04T21:56:54.13Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/ce/6d3dcc0cf66a099cecce47e7e47a74b34f684027533aa44a5763d5eaea05/mcpfleet_obs-0.4.0-py3-none-any.whl", hash = "sha256:1bc4cf667201b6616390574b88fd8f389209d2f6b07cac4090cf04481f7d0978", size = 8086, upload-time = "2026-10-24T22:08:37.962Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/f9/b35796d475b470fe843b19493b506c77b7e5372b0c1be6bef715c1efecd3/mcpfleet_obs-0.4.1-py3-none-any.whl", hash = "sha256:ed1df3b4d9d374b796539ff8c9d9e0e301e4da3785d0f317eff228c414761810", size = 8194, upload-time = "2026-11-04T21:56:52.645Z" },
 ]
 
 [[package]]
@@ -1397,7 +1397,7 @@ wheels = [
 
 [[package]]
 name = "uk-due-diligence-mcp"
-version = "1.5.0"
+version = "1.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
@@ -1420,7 +1420,7 @@ requires-dist = [
     { name = "fastmcp", specifier = "==4.1.3" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = "==2.3.0" },
-    { name = "mcpfleet-obs", specifier = "==0.4.0" },
+    { name = "mcpfleet-obs", specifier = "==0.4.1" },
     { name = "pydantic", specifier = "==2.13.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
 ]
