@@ -105,14 +105,16 @@ def register_tools(mcp: FastMCP) -> None:
                 ),
             )
 
-        import httpx as _httpx
+        from http_client import _request_with_retry, land_registry_client
 
         # Price Paid query via SPARQL — POST with form-encoded body
         # (the endpoint requires POST).
         sparql_query = PPI_QUERY_TEMPLATE.format(postcode=postcode)
         body = urllib.parse.urlencode({"query": sparql_query}).encode()
-        async with _httpx.AsyncClient(timeout=20.0) as client:
-            ppi_resp = await client.post(
+        async with land_registry_client() as client:
+            ppi_resp = await _request_with_retry(
+                client,
+                "POST",
                 SPARQL_ENDPOINT,
                 content=body,
                 headers={
@@ -120,8 +122,7 @@ def register_tools(mcp: FastMCP) -> None:
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
             )
-            ppi_resp.raise_for_status()
-            ppi_data = ppi_resp.json()
+        ppi_data = ppi_resp.json()
 
         def _val(b: dict, key: str) -> str:
             return b.get(key, {}).get("value", "") or ""
