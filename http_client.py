@@ -270,6 +270,11 @@ def gazette_client() -> _GazetteClient:
     return _GazetteClient()
 
 
+def land_registry_client() -> httpx.AsyncClient:
+    """HMLR Land Registry linked-data endpoints — no auth required, read-only."""
+    return httpx.AsyncClient(timeout=20.0)
+
+
 def sanctions_client() -> httpx.AsyncClient:
     """Streaming client for the bulk consolidated sanctions files.
 
@@ -292,6 +297,7 @@ __all__ = [
     "companies_house_client",
     "charity_client",
     "gazette_client",
+    "land_registry_client",
     "sanctions_client",
     "_request_with_retry",
     "CH_BASE",

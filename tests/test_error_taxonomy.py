@@ -25,6 +25,10 @@ Paths exercised:
   - gazette_insolvency against a mocked persistent 503 -> transient +
     is_retryable=True (B3: the bare `except Exception: pass` used to
     swallow this into an empty notices list instead).
+  - land_title_search against a mocked persistent 503 -> transient +
+    is_retryable=True, and against a mocked 500 -> structured unknown
+    (the tool used to bypass _request_with_retry, so every HMLR failure
+    escaped as an unstructured masked exception).
 """
 
 from __future__ import annotations
@@ -227,3 +231,61 @@ class TestErrorTaxonomy:
         assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
         assert payload.error_category == "transient"
         assert payload.is_retryable is True
+
+    @pytest.mark.asyncio
+    async def test_land_title_search_persistent_503_is_transient_error(self, client: Client, monkeypatch):
+        """land_title_search used to bypass _request_with_retry entirely —
+        a bare client.post + raise_for_status(), so any HMLR failure escaped
+        as an unstructured exception that masked to 'Error calling tool' and
+        counted as error_category=unknown. Persistent 503 must now classify
+        as transient/is_retryable=True."""
+        async def no_sleep(_seconds: float) -> None:
+            return None
+
+        monkeypatch.setattr(http_client.asyncio, "sleep", no_sleep)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, text="service unavailable")
+
+        def mock_land_registry_client() -> httpx.AsyncClient:
+            return httpx.AsyncClient(
+                timeout=20.0,
+                transport=httpx.MockTransport(handler),
+            )
+
+        # The tool imports land_registry_client lazily from http_client at
+        # call time, so the patch target is the http_client module namespace.
+        monkeypatch.setattr(http_client, "land_registry_client", mock_land_registry_client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await client.call_tool("land_title_search", {"address_or_postcode": "NG1 1AB"})
+
+        payload = parse_error_payload(str(exc_info.value))
+        assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+        assert payload.error_category == "transient"
+        assert payload.is_retryable is True
+
+    @pytest.mark.asyncio
+    async def test_land_title_search_500_is_structured_unknown(self, client: Client, monkeypatch):
+        """A non-retryable HMLR status must still surface as a structured
+        FleetErrorPayload (category unknown, is_retryable=False) rather than
+        the pre-fix masked bare exception."""
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(500, text="boom")
+
+        def mock_land_registry_client() -> httpx.AsyncClient:
+            return httpx.AsyncClient(
+                timeout=20.0,
+                transport=httpx.MockTransport(handler),
+            )
+
+        monkeypatch.setattr(http_client, "land_registry_client", mock_land_registry_client)
+
+        with pytest.raises(ToolError) as exc_info:
+            await client.call_tool("land_title_search", {"address_or_postcode": "NG1 1AB"})
+
+        payload = parse_error_payload(str(exc_info.value))
+        assert payload is not None, f"error message did not parse as a FleetErrorPayload: {exc_info.value}"
+        assert payload.error_category == "unknown"
+        assert payload.is_retryable is False
+        assert "500" in payload.description
