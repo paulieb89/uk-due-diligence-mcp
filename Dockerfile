@@ -28,8 +28,17 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Copy application code
 COPY . .
 
+# Install the project itself (dependencies are already cached above) so its
+# distribution metadata exists: server.py reads serverInfo.version from it.
+RUN uv sync --frozen --no-dev
+
 # Run out of the synced environment rather than the system interpreter.
 ENV PATH="/app/.venv/bin:$PATH"
+
+# Commit the image was built from, reported by /health. The deploy workflows
+# pass --build-arg GIT_SHA=<sha>; declared last so it never busts the layer cache.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 EXPOSE 8080
 
