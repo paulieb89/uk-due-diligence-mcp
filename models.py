@@ -113,7 +113,7 @@ class CompanySearchResult(BaseModel):
     is_partial: bool = Field(
         False,
         description=(
-            "True when filtering stopped at the per-call scan cap before finding "
+            "True when filtering stopped at the per-call cap of 500 scanned results before finding "
             "items_per_page matches and before reaching the end of the upstream "
             "results. Fewer items does NOT mean no more matches exist: re-call "
             "with start_index=next_start_index to keep scanning."

@@ -904,7 +904,7 @@ def register_tools(mcp: FastMCP) -> None:
         company_status / company_type are applied by this server: Companies
         House's search endpoint ignores them. A filtered call scans upstream
         pages until it has items_per_page matches or has examined
-        FILTER_SCAN_CAP results; if it stops at the cap, is_partial is true
+        500 upstream results; if it stops at that cap, is_partial is true
         and fewer items does not mean no more matches exist.
         """
         filters: dict[str, str] = {}

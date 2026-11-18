@@ -305,3 +305,12 @@ async def test_d4_schema_lists_the_allowed_entity_types(mcp_client):
 
     assert "person" in str(schema) and "entity" in str(schema)
     assert "enum" in str(schema)
+
+
+@pytest.mark.asyncio
+async def test_d1_description_states_the_cap_as_a_number(mcp_client):
+    """The model cannot see FILTER_SCAN_CAP; the description must carry its value."""
+    tools = {t.name: t for t in await mcp_client.list_tools()}
+    description = tools["company_search"].description or ""
+    assert "FILTER_SCAN_CAP" not in description
+    assert f"{companies_house.FILTER_SCAN_CAP} upstream results" in description
