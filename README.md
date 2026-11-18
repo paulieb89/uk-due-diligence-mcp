@@ -4,9 +4,7 @@
 
 **Official-source UK due-diligence data for AI agents.**
 
-Search Companies House, Charity Commission, The Gazette and HMLR price-paid data, plus screen names against the UK (FCDO), OFAC, EU and UN sanctions lists. Exposes atomic MCP tools for company ownership, officers, cross-company appointment history, secured charges, insolvency notices and related registry evidence — the consuming agent decides how to investigate, not the server.
-
-Every data source is a legally-mandated register with a free official API. Zero paywalls.
+Search Companies House, Charity Commission, The Gazette and HMLR price-paid data, plus screen names against the UK (FCDO), OFAC, EU and UN sanctions lists. Exposes atomic MCP tools for company ownership, officers, cross-company appointment history, secured charges, insolvency notices and related registry evidence — the consuming agent decides how to investigate, not the server
 
 [![PyPI](https://img.shields.io/pypi/v/uk-due-diligence-mcp)](https://pypi.org/project/uk-due-diligence-mcp/)
 [![SafeSkill](https://safeskill.dev/api/badge/paulieb89-uk-due-diligence-mcp)](https://safeskill.dev/scan/paulieb89-uk-due-diligence-mcp)
@@ -72,60 +70,6 @@ VS Code and Cursor: use the install badges at the top of this page. For clients 
 ### Run it locally (stdio)
 
 Local stdio mode isn't supported yet ([#51](https://github.com/paulieb89/uk-due-diligence-mcp/issues/51)); use the hosted endpoint.
-
----
-
-## Tools
-
-**Companies House**
-
-| Tool | Description |
-|------|-------------|
-| `company_search` | Search by name/keyword, filter by status/type |
-| `company_profile` | Status, filing compliance, registered address, `has_charges` summary |
-| `company_officers` | Directors/secretaries; each carries an `officer_id` |
-| `company_psc` | Beneficial owners, PSC chain, overseas-corporate-PSC flag |
-| `officer_appointments` | Full appointment history for a person by `officer_id` — including dissolved or insolvent companies not named anywhere else |
-| `company_charges` | Complete secured-charge history: status, dates, secured parties, what each charge covers |
-| `disqualified_search` | Search disqualified directors by name |
-| `disqualified_profile` | Full disqualification record: period, Act, associated companies |
-
-**Charity Commission**
-
-| Tool | Description |
-|------|-------------|
-| `charity_search` | Search by name, filter by registration status |
-| `charity_profile` | Full record: trustees, income/expenditure, governing document |
-
-**HMLR Land Registry**
-
-| Tool | Description |
-|------|-------------|
-| `land_title_search` | Price Paid Index sale transactions by postcode — not title ownership (see [Limitations](#limitations)) |
-
-**The Gazette**
-
-| Tool | Description |
-|------|-------------|
-| `gazette_insolvency` | Corporate insolvency notices across the Gazette's notice-code taxonomy (codes 2401-2465) |
-| `gazette_notice` | Full legal wording of a specific notice |
-
-**Sanctions**
-
-| Tool | Description |
-|------|-------------|
-| `sanctions_screen` | Screen a name against the UK (FCDO), OFAC, EU and UN consolidated lists |
-
-The UK list is the FCDO UK Sanctions List XML and is reported under the label `OFSI (UK)`. The parser refuses an incomplete export: a file with fewer than 5,000 designations, a drop of more than 10% against the previous load in the same process, a duplicate `UniqueID`, or a missing `DateGenerated` fails the UK list, which is then reported in `lists_unavailable` with `is_partial` true. The floor and drop threshold are constants in `sanctions.py`.
-
-**Cross-register**
-
-| Tool | Description |
-|------|-------------|
-| `search` | Fan-out search across all registers — returns IDs (for ChatGPT deep research) |
-| `fetch` | Fetch a structured record by ID returned from `search` |
-
----
 
 ## Examples
 
