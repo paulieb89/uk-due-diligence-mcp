@@ -29,6 +29,12 @@ jobs:
       - name: Repo invariants and release tag
         run: uv run --no-project --python 3.12 python .claude/hooks/check_invariants.py --standalone --expect "${{ github.event.release.tag_name }}"
 
+      - name: Tool reference is current
+        # Regenerates docs/tool-reference.md's GENERATED tables from fastmcp inspect
+        # and fails if the committed file differs or a tool is in no table.
+        run: |
+          uv sync --frozen --no-dev
+          uv run --no-sync python scripts/gen_reference.py --check
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:

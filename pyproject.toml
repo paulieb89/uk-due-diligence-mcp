@@ -92,3 +92,9 @@ select = ["E4", "E7", "E9", "F"]
 # registration order reads top-to-bottom under the "Register all tools"
 # banner. The placement is deliberate, not an oversight.
 "server.py" = ["E402"]
+
+[tool.reference-tables]
+# scripts/gen_reference.py: fastmcp inspect entry and the docs whose
+# GENERATED tables it rewrites.
+entry = "server.py:mcp"
+docs = ["docs/tool-reference.md"]
