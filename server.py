@@ -1,8 +1,8 @@
 """
-server.py — uk_due_diligence_mcp
+server.py — uk-due-diligence-mcp
 
 UK Due Diligence MCP server.
-18 tools + 10 resource templates across five official-source registers
+Tools and resource templates across five official-source registers
 (four public registers plus consolidated sanctions lists).
 
 Data sources:
@@ -14,7 +14,7 @@ Data sources:
 
 Transport: Streamable HTTP, stateless, JSON responses, deployed on Fly.io.
 
-Tools (18 — all clients including ChatGPT):
+Tools (all clients including ChatGPT):
     company_search, company_profile, company_officers, company_psc,
         officer_appointments, company_charges, company_filing_history,
         company_filing_document
@@ -25,7 +25,7 @@ Tools (18 — all clients including ChatGPT):
     sanctions_screen
     search, fetch
 
-Resources (10 noun/identifier — protocol-compliant clients only):
+Resources (noun/identifier — protocol-compliant clients only):
     company://{company_number}/profile
     company://{company_number}/officers
     company://{company_number}/psc
