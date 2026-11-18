@@ -33,7 +33,7 @@ from fastmcp.resources import ResourceContent
 from fastmcp.tools import ToolResult
 from pydantic import Field
 
-from http_client import _request_with_retry, companies_house_client
+from http_client import _json_or_error, _request_with_retry, companies_house_client
 from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 from models import CompanyFilingDocumentResult
 
@@ -213,7 +213,7 @@ async def _fetch_document_metadata(document_id: str) -> dict[str, Any]:
     url = _document_metadata_url(document_id)
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", url)
-        return resp.json()
+        return _json_or_error(resp)
 
 
 async def _fetch_document_content_bytes(
@@ -239,12 +239,17 @@ async def _fetch_document_content_bytes(
     # "unknown" error before we ever got to inspect Location. This request
     # needs to see the raw redirect, so raise_for_status is only invoked
     # (and only then) for a genuine non-302/non-2xx status.
-    async with companies_house_client() as client:
-        resp = await client.request(
-            "GET", content_url,
-            headers={"Accept": mime_type},
-            follow_redirects=False,
-        )
+    try:
+        async with companies_house_client() as client:
+            resp = await client.request(
+                "GET", content_url,
+                headers={"Accept": mime_type},
+                follow_redirects=False,
+            )
+    except httpx.HTTPError as exc:
+        # Bypasses _request_with_retry (see above), so transport failures need
+        # routing through the taxonomy here or they escape unstructured (#37).
+        raise_http_tool_error(exc, attempted=attempted)
 
     if resp.status_code != 302:
         if not (200 <= resp.status_code < 300):

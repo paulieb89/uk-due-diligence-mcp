@@ -26,7 +26,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import Field
 from fastmcp import FastMCP
 
-from http_client import _request_with_retry, companies_house_client
+from http_client import _json_or_error, _request_with_retry, companies_house_client
 from mcpfleet_obs import raise_tool_error
 from models import (
     ChargeClassification,
@@ -233,7 +233,7 @@ async def _search_companies(
                 client, "GET", "/search/companies",
                 params={"q": query, "items_per_page": page_size, "start_index": offset},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             upstream_total = int(data.get("total_results", 0) or 0)
             page = data.get("items", []) or []
 
@@ -307,13 +307,16 @@ def _summarize_has_charges(charges: list[CompanyCharge]) -> bool | None:
 async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
-        data = resp.json()
+        data = _json_or_error(resp)
 
     has_charges: bool | None = None
     try:
         charges_result = await _fetch_company_charges(company_number)
         has_charges = _summarize_has_charges(charges_result.charges)
-    except (ToolError, httpx.HTTPError):
+    except (ToolError, httpx.HTTPError, ValueError):
+        # ValueError covers a parse failure in the charges payload: the profile
+        # itself is fine, so has_charges degrades to unknown instead of failing
+        # the whole call.
         logger.warning(
             "charges check failed for %s — has_charges is unknown", company_number
         )
@@ -351,7 +354,7 @@ async def _confirm_company_exists(company_number: str) -> dict[str, Any]:
     """
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
-        return resp.json()
+        return _json_or_error(resp)
 
 
 async def _fetch_company_officers(
@@ -370,7 +373,7 @@ async def _fetch_company_officers(
                 f"/company/{company_number}/officers",
                 params={"items_per_page": page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -453,7 +456,7 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
                 f"/company/{company_number}/persons-with-significant-control",
                 params={"items_per_page": page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -560,7 +563,7 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
                 f"/officers/{oid}/appointments",
                 params={"items_per_page": requested_page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -670,7 +673,7 @@ async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
                 f"/company/{company_number}/charges",
                 params={"items_per_page": page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -793,7 +796,7 @@ async def _fetch_company_filing_history(
 
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", attempted.split(" ", 1)[1], params=params)
-        data = resp.json()
+        data = _json_or_error(resp)
 
         status = data.get("filing_history_status")
         if status and str(status).startswith("filing-history-not-available"):

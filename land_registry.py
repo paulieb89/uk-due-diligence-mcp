@@ -105,7 +105,7 @@ def register_tools(mcp: FastMCP) -> None:
                 ),
             )
 
-        from http_client import _request_with_retry, land_registry_client
+        from http_client import _json_or_error, _request_with_retry, land_registry_client
 
         # Price Paid query via SPARQL — POST with form-encoded body
         # (the endpoint requires POST).
@@ -122,7 +122,7 @@ def register_tools(mcp: FastMCP) -> None:
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
             )
-        ppi_data = ppi_resp.json()
+        ppi_data = _json_or_error(ppi_resp)
 
         def _val(b: dict, key: str) -> str:
             return b.get(key, {}).get("value", "") or ""

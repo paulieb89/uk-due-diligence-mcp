@@ -14,7 +14,7 @@ from pydantic import Field
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
-from http_client import _request_with_retry, charity_client
+from http_client import _json_or_error, _request_with_retry, charity_client
 from mcpfleet_obs import parse_error_payload
 from models import (
     CharityClassification,
@@ -117,7 +117,7 @@ async def _search_charities(query: str, offset: int, limit: int) -> CharitySearc
                 client, "GET",
                 f"/searchCharityName/{query}",
             )
-            data = resp.json()
+            data = _json_or_error(resp)
         except ToolError as exc:
             # searchCharityName 404s when a query matches zero charities
             # rather than returning 200 with an empty list — a search
@@ -174,7 +174,7 @@ async def _fetch_charity_profile(charity_number: str) -> CharityProfile:
             client, "GET",
             f"/allcharitydetailsV2/{lookup_number}/{suffix}",
         )
-        data = resp.json()
+        data = _json_or_error(resp)
 
     reg_num = str(data.get("reg_charity_number") or lookup_number)
     raw_status = data.get("reg_status")
