@@ -30,9 +30,33 @@ Every data source is a legally-mandated register with a free official API. Zero 
 
 ---
 
-## Quick start
+## Connect
 
-### Hosted (no install)
+Hosted endpoint — no install, no API key:
+
+```text
+https://uk-due-diligence-mcp.fly.dev/mcp
+```
+
+### Claude (web, desktop and mobile)
+
+1. Open **Customize → Connectors** ([claude.ai/customize/connectors](https://claude.ai/customize/connectors)).
+2. Click **Add custom connector**.
+3. Name it `uk-due-diligence`, paste the URL above and click **Add**. No sign-in is needed.
+
+That's it — no config file to edit and no restart. Add the connector on web or desktop, and it's then available on your account, including the mobile apps. Turn it on or off per chat from the **+** menu → **Connectors**. On Team and Enterprise plans an Owner adds it once under **Organization settings → Connectors**; Free plans can add one custom connector.
+
+### Claude Code
+
+If you've added the connector above, Claude Code lists it under `/mcp` — but only when Claude Code is signed in with your claude.ai subscription login, not an API key. Otherwise, add it directly:
+
+```bash
+claude mcp add --transport http --scope user uk-due-diligence https://uk-due-diligence-mcp.fly.dev/mcp
+```
+
+### Other clients
+
+VS Code and Cursor: use the install badges at the top of this page. For clients configured with `mcpServers` JSON:
 
 ```json
 {
@@ -45,21 +69,37 @@ Every data source is a legally-mandated register with a free official API. Zero 
 }
 ```
 
-### Local (uvx)
+### Run it locally (stdio)
+
+Local mode needs your own free API keys — see [Configuration](#configuration).
+
+Claude Code:
+
+```bash
+claude mcp add --env CH_API_KEY=your-companies-house-key --env CHARITY_API_KEY=your-charity-commission-key --scope user uk-due-diligence -- uvx uk-due-diligence-mcp
+```
+
+<details>
+<summary>Claude Desktop and other <code>mcpServers</code> clients</summary>
+
+Claude Desktop runs local servers either as a packaged desktop extension (`.mcpb`, installed from **Settings → Extensions**) or from `claude_desktop_config.json`. There's no `.mcpb` for this server yet, so for local mode add this to the config file (**Settings → Developer → Edit Config**) and restart the app. For everyday use the hosted connector above is simpler.
 
 ```json
 {
   "mcpServers": {
     "uk-due-diligence": {
-      "type": "stdio",
       "command": "uvx",
-      "args": ["uk-due-diligence-mcp"]
+      "args": ["uk-due-diligence-mcp"],
+      "env": {
+        "CH_API_KEY": "your-companies-house-key",
+        "CHARITY_API_KEY": "your-charity-commission-key"
+      }
     }
   }
 }
 ```
 
-See [Configuration](#configuration) for the environment variables it needs.
+</details>
 
 ---
 
