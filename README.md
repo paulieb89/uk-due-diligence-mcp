@@ -71,35 +71,7 @@ VS Code and Cursor: use the install badges at the top of this page. For clients 
 
 ### Run it locally (stdio)
 
-Local mode needs your own free API keys — see [Configuration](#configuration).
-
-Claude Code:
-
-```bash
-claude mcp add --env CH_API_KEY=your-companies-house-key --env CHARITY_API_KEY=your-charity-commission-key --scope user uk-due-diligence -- uvx uk-due-diligence-mcp
-```
-
-<details>
-<summary>Claude Desktop and other <code>mcpServers</code> clients</summary>
-
-Claude Desktop runs local servers either as a packaged desktop extension (`.mcpb`, installed from **Settings → Extensions**) or from `claude_desktop_config.json`. There's no `.mcpb` for this server yet, so for local mode add this to the config file (**Settings → Developer → Edit Config**) and restart the app. For everyday use the hosted connector above is simpler.
-
-```json
-{
-  "mcpServers": {
-    "uk-due-diligence": {
-      "command": "uvx",
-      "args": ["uk-due-diligence-mcp"],
-      "env": {
-        "CH_API_KEY": "your-companies-house-key",
-        "CHARITY_API_KEY": "your-charity-commission-key"
-      }
-    }
-  }
-}
-```
-
-</details>
+Local stdio mode isn't supported yet ([#51](https://github.com/paulieb89/uk-due-diligence-mcp/issues/51)); use the hosted endpoint.
 
 ---
 
