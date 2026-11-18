@@ -30,9 +30,33 @@ Every data source is a legally-mandated register with a free official API. Zero 
 
 ---
 
-## Quick start
+## Connect
 
-### Hosted (no install)
+Hosted endpoint — no install, no API key:
+
+```text
+https://uk-due-diligence-mcp.fly.dev/mcp
+```
+
+### Claude (web, desktop and mobile)
+
+1. Open **Customize → Connectors** ([claude.ai/customize/connectors](https://claude.ai/customize/connectors)).
+2. Click **Add custom connector**.
+3. Name it `uk-due-diligence`, paste the URL above and click **Add**. No sign-in is needed.
+
+That's it — no config file to edit and no restart. Add the connector on web or desktop, and it's then available on your account, including the mobile apps. Turn it on or off per chat from the **+** menu → **Connectors**. On Team and Enterprise plans an Owner adds it once under **Organization settings → Connectors**; Free plans can add one custom connector.
+
+### Claude Code
+
+If you've added the connector above, Claude Code lists it under `/mcp` — but only when Claude Code is signed in with your claude.ai subscription login, not an API key. Otherwise, add it directly:
+
+```bash
+claude mcp add --transport http --scope user uk-due-diligence https://uk-due-diligence-mcp.fly.dev/mcp
+```
+
+### Other clients
+
+VS Code and Cursor: use the install badges at the top of this page. For clients configured with `mcpServers` JSON:
 
 ```json
 {
@@ -45,21 +69,9 @@ Every data source is a legally-mandated register with a free official API. Zero 
 }
 ```
 
-### Local (uvx)
+### Run it locally (stdio)
 
-```json
-{
-  "mcpServers": {
-    "uk-due-diligence": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["uk-due-diligence-mcp"]
-    }
-  }
-}
-```
-
-See [Configuration](#configuration) for the environment variables it needs.
+Local stdio mode isn't supported yet ([#51](https://github.com/paulieb89/uk-due-diligence-mcp/issues/51)); use the hosted endpoint.
 
 ---
 
