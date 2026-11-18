@@ -2,7 +2,16 @@
 
 FastMCP server over 5 UK registers — Companies House, Charity Commission,
 The Gazette, HMLR Land Registry, and OFSI/OFAC/EU/UN sanctions.
-18 tools. Flat layout: `server.py` registers 8 domain modules.
+Flat layout: `server.py` registers 8 domain modules. For the live tool list don't
+trust a count in prose — run `uv run --no-sync fastmcp inspect server.py:mcp`
+(add `--format fastmcp -o manifest.json` for the full JSON).
+
+`docs/tool-reference.md` is generated: `uv run --no-sync python scripts/gen_reference.py`
+captures the surface with `fastmcp inspect` and rewrites only the tables between
+`GENERATED` markers (title annotation + first sentence of the description). A new
+tool namespace needs its own marker block. `--check` (run in `release.yml`; and in PR
+CI once #43 lands) fails on drift or on a tool missing from every table. The script
+is shared verbatim with uk-legal-mcp and uk-business-mcp.
 
 - **GitHub:** `paulieb89/uk-due-diligence-mcp`
 - **Prod:** `https://uk-due-diligence-mcp.fly.dev/mcp`
