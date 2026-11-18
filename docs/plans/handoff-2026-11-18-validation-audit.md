@@ -47,11 +47,22 @@ audit plus the residual unstructured errors in #37, and ship them. Template:
   fails on a stale `.venv`.
 - A branch staging deploy needs `--ref <branch>` (see the `/release` skill).
 
+## Later the same day (fleet)
+
+- README `## Connect` section (#50); local stdio mode documented as not
+  supported yet (#51 — `uk-due-diligence-mcp` starts HTTP, not stdio).
+- uk-business-mcp 0.4.1 (FastMCP 4.1.8, `GET /mcp` 405) and govuk-mcp 0.3.2
+  shipped. govuk's overload was clients (mostly Claude Code) holding its own
+  `GET /mcp` streams open, not the proxy. This server already returned 405 and
+  was unaffected.
+
 ## Open issues
 
-#43 · #41 · #26 · #28 · #29
+#49 · #51 · #43 · #41 · #26 · #28 · #29
 
 ## Recommended next step
+
+**AMENDED 2026-11-18:** first FastMCP 4.1.3 → 4.1.8 (#49) with legal and govuk, so the fleet runs one patch, then a stdio entry point (#51, copying uk-legal-mcp's `main_stdio`). Previously:
 
 #43: PR CI modelled on uk-legal-mcp's `ci.yml` (suite, invariants,
 `gen_reference.py --check`). Every PR in this work was merged on local runs
