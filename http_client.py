@@ -10,6 +10,7 @@ Provides a single httpx.AsyncClient instance per data source with:
 from __future__ import annotations
 
 import asyncio
+import http.client
 import math
 import os
 import time
@@ -130,6 +131,32 @@ async def _request_with_retry(
     )
 
 
+def _json_or_error(resp: httpx.Response, attempted: str | None = None) -> Any:
+    """resp.json(), or a structured transient error for a non-JSON body.
+
+    A 200 carrying an HTML maintenance page or a truncated body raises
+    JSONDecodeError (a ValueError), which no except-ToolError/except-HTTPError
+    arm catches, so it used to reach the client as a masked "Error calling
+    tool" counted as unknown (#37).
+    """
+    try:
+        return resp.json()
+    except ValueError:
+        if attempted is None:
+            attempted = f"{resp.request.method} {str(resp.request.url).split('?', 1)[0]}"
+        content_type = resp.headers.get("content-type", "unknown")
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Upstream returned HTTP {resp.status_code} with a non-JSON body "
+                f"(content-type {content_type}); likely a maintenance or error page. "
+                "Retry later."
+            ),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Client factories
 # ---------------------------------------------------------------------------
@@ -187,6 +214,14 @@ def _urllib_get(
         if isinstance(exc.reason, TimeoutError):
             raise httpx.ReadTimeout(str(exc.reason), request=request) from exc
         raise httpx.ConnectError(str(exc.reason), request=request) from exc
+    except http.client.HTTPException as exc:
+        # RemoteDisconnected, IncompleteRead, BadStatusLine...: the connection
+        # broke mid-exchange. Not a subclass of OSError or URLError.
+        raise httpx.RemoteProtocolError(f"{type(exc).__name__}: {exc}", request=request) from exc
+    except OSError as exc:
+        # ssl.SSLError, ConnectionResetError and other socket-level failures
+        # raised outside urlopen's URLError wrapping (e.g. during resp.read()).
+        raise httpx.ConnectError(f"{type(exc).__name__}: {exc}", request=request) from exc
 
 
 # Gazette fair-use policy (https://www.thegazette.co.uk/fair-use-policy): at most
@@ -294,6 +329,7 @@ def sanctions_client() -> httpx.AsyncClient:
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    "_json_or_error",
     "companies_house_client",
     "charity_client",
     "gazette_client",

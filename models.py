@@ -66,7 +66,19 @@ class CompanySearchResult(BaseModel):
 
     query: str = Field(..., description="The query string that was searched.")
     total_results: int = Field(
-        ..., description="Total matching companies in Companies House (server-side)."
+        ...,
+        description=(
+            "Companies House's total for the query BEFORE any status/type filter "
+            "(same as upstream_total, kept for compatibility). Not a count of "
+            "filtered matches."
+        ),
+    )
+    upstream_total: int = Field(
+        ...,
+        description=(
+            "Total results Companies House reports for the query text alone. "
+            "/search/companies cannot filter by status or type, so this is unfiltered."
+        ),
     )
     start_index: int = Field(
         ...,
@@ -78,11 +90,51 @@ class CompanySearchResult(BaseModel):
     returned: int = Field(
         ..., description="Number of items actually returned on this page."
     )
+    filtered_returned: int = Field(
+        ...,
+        description=(
+            "Number of returned items that passed filters_applied (equal to "
+            "`returned`; every returned item satisfies every applied filter)."
+        ),
+    )
+    filters_applied: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Filters this server applied to the results, e.g. "
+            "{'company_status': 'active'}. Empty when none were requested. "
+            "Companies House ignores status/type on this endpoint, so the server "
+            "filters each upstream page itself."
+        ),
+    )
+    upstream_scanned: int = Field(
+        ...,
+        description="Upstream search results examined to build this page.",
+    )
+    is_partial: bool = Field(
+        False,
+        description=(
+            "True when filtering stopped at the per-call cap of 500 scanned results before finding "
+            "items_per_page matches and before reaching the end of the upstream "
+            "results. Fewer items does NOT mean no more matches exist: re-call "
+            "with start_index=next_start_index to keep scanning."
+        ),
+    )
+    partial_reason: str | None = Field(
+        None, description="Why the result is partial, when is_partial is true."
+    )
+    next_start_index: int | None = Field(
+        None,
+        description=(
+            "Upstream offset to pass as start_index for the next page, or null "
+            "when the upstream results are exhausted. With filters this is NOT "
+            "start_index+items_per_page, because non-matching results are skipped."
+        ),
+    )
     has_more: bool = Field(
         ...,
         description=(
-            "True if more results exist beyond this page. Re-call with "
-            "start_index=start_index+items_per_page to fetch the next page."
+            "True if upstream results remain beyond this page. Re-call with "
+            "start_index=next_start_index to fetch the next page."
         ),
     )
     items: list[CompanySearchItem] = Field(
@@ -99,9 +151,14 @@ class CompanyAccountsSummary(BaseModel):
 
     model_config = BASE_CFG
 
-    overdue: bool = Field(
-        False,
-        description="True if accounts are past their due date at Companies House.",
+    overdue: bool | None = Field(
+        None,
+        description=(
+            "True if the accounts are past due at Companies House, false if "
+            "Companies House says they are not. Null when Companies House "
+            "returned no overdue flag (e.g. a registered overseas entity, or a "
+            "missing block): unknown, NOT an all-clear."
+        ),
     )
     last_accounts_made_up_to: str | None = Field(
         None,
@@ -117,9 +174,14 @@ class CompanyConfirmationStatementSummary(BaseModel):
 
     model_config = BASE_CFG
 
-    overdue: bool = Field(
-        False,
-        description="True if the confirmation statement is past its due date.",
+    overdue: bool | None = Field(
+        None,
+        description=(
+            "True if the confirmation statement is past due at Companies House, false if "
+            "Companies House says it is not. Null when Companies House "
+            "returned no overdue flag (e.g. a registered overseas entity, or a "
+            "missing block): unknown, NOT an all-clear."
+        ),
     )
     next_due: str | None = Field(
         None, description="ISO date the next confirmation statement is due."

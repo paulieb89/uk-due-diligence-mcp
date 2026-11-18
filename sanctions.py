@@ -32,7 +32,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from collections import namedtuple
 from datetime import datetime, timezone
-from typing import Annotated, Iterator
+from typing import Annotated, Iterator, Literal
 
 from pydantic import Field
 from fastmcp import FastMCP
@@ -514,8 +514,11 @@ def register_tools(mcp: FastMCP) -> None:
             description="Person or company/entity name to screen against the consolidated sanctions lists.",
             min_length=2, max_length=200,
         )],
-        entity_type: Annotated[str | None, Field(
-            description="Optional filter: 'person' or 'entity'. Omit to screen both.",
+        entity_type: Annotated[Literal["person", "entity"] | None, Field(
+            description=(
+                "Optional filter: 'person' or 'entity' (a company is an 'entity'). "
+                "Any other value is rejected. Omit to screen both."
+            ),
         )] = None,
     ) -> SanctionsScreenResult:
         """Screen a name against the UK (OFSI), US (OFAC), EU and UN consolidated sanctions lists.
@@ -541,7 +544,7 @@ def register_tools(mcp: FastMCP) -> None:
         empty screen. `as_at` is when the lists were last refreshed on this server.
         """
         index, as_at, lists_ok = await get_index()
-        etype = entity_type if entity_type in VALID_ENTITY_TYPES else None
+        etype = entity_type
         hits = _screen(index, name, etype)
         unavailable = [label for label in _EXPECTED_LISTS if label not in lists_ok]
         stale = not _fresh(time.monotonic())

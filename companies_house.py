@@ -18,14 +18,15 @@ company_number-keyed fetch helpers below):
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+import re
+from typing import Annotated, Any, Literal
 
 import httpx
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 from fastmcp import FastMCP
 
-from http_client import _request_with_retry, companies_house_client
+from http_client import _json_or_error, _request_with_retry, companies_house_client
 from mcpfleet_obs import raise_tool_error
 from models import (
     ChargeClassification,
@@ -77,8 +78,43 @@ LIVE_CHARGE_STATUSES = {"outstanding", "part-satisfied"}
 FULLY_SATISFIED_STATUS = "fully-satisfied"
 
 
+_COMPANY_NUMBER_RE = re.compile(r"^[A-Z0-9]{8}$")
+_PREFIXED_SHORT_RE = re.compile(r"^([A-Z]{2})(\d{1,5})$")
+
+
 def _normalise_company_number(v: str) -> str:
-    return v.zfill(8) if v.isdigit() else v.upper()
+    """Canonicalise a company number, or raise a validation error.
+
+    Strips surrounding whitespace, zero-pads digit-only numbers to 8 and
+    prefixed numbers (SC, NI, OC, OE...) to prefix + 6 digits, then requires
+    exactly 8 letters or digits. A malformed number is a `validation` error,
+    distinct from `not_found` for a well-formed number that does not exist: in
+    due diligence "company not found" is a finding, and a formatting slip must
+    not produce one.
+    """
+    n = (v or "").strip().upper()
+    if n.isdigit():
+        n = n.zfill(8)
+    elif m := _PREFIXED_SHORT_RE.match(n):
+        n = m.group(1) + m.group(2).zfill(6)
+    if not _COMPANY_NUMBER_RE.match(n):
+        raise_tool_error(
+            "validation",
+            is_retryable=False,
+            attempted="normalise company_number",
+            description=(
+                f"company_number {v!r} is malformed: expected 8 letters or digits, "
+                "e.g. '03782379' or 'SC123456' (shorter digit-only numbers are "
+                "zero-padded). Use company_search to find the number."
+            ),
+        )
+    return n
+
+
+def _overdue_flag(block: dict[str, Any]) -> bool | None:
+    """Companies House's overdue flag, or None when it sent none (unknown)."""
+    flag = block.get("overdue")
+    return flag if isinstance(flag, bool) else None
 
 
 def _truncate_natures(natures: list[str], max_chars: int) -> list[str]:
@@ -114,6 +150,135 @@ def _officer_id_from_links(links: dict[str, Any]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Company search
+# ---------------------------------------------------------------------------
+
+# Values from Companies House's published enumerations (constants.yml in
+# github.com/companieshouse/api-enumerations, sections company_status and
+# company_type), so the input schema lists what is valid and anything else is
+# rejected before a request is made.
+CompanyStatus = Literal[
+    "active", "dissolved", "liquidation", "receivership", "converted-closed",
+    "voluntary-arrangement", "insolvency-proceedings", "administration", "open",
+    "closed", "registered", "removed",
+]
+CompanyType = Literal[
+    "private-unlimited", "ltd", "plc", "old-public-company",
+    "private-limited-guarant-nsc-limited-exemption", "limited-partnership",
+    "private-limited-guarant-nsc", "converted-or-closed", "private-unlimited-nsc",
+    "private-limited-shares-section-30-exemption", "protected-cell-company",
+    "assurance-company", "oversea-company", "eeig-establishment", "icvc-securities",
+    "icvc-warrant", "icvc-umbrella", "registered-society-non-jurisdictional",
+    "industrial-and-provident-society", "northern-ireland", "northern-ireland-other",
+    "llp", "royal-charter", "investment-company-with-variable-capital",
+    "unregistered-company", "other", "european-public-limited-liability-company-se",
+    "united-kingdom-societas", "uk-establishment", "scottish-partnership",
+    "charitable-incorporated-organisation",
+    "scottish-charitable-incorporated-organisation",
+    "further-education-or-sixth-form-college-corporation", "eeig", "ukeig",
+    "registered-overseas-entity",
+]
+
+# /search/companies accepts but ignores status and type (audit finding D1:
+# a search for active companies returned liquidated ones), so filtering is
+# done here. A filtered call reads at most this many upstream results.
+FILTER_SCAN_CAP = 500
+_SEARCH_PAGE_MAX = 100  # Companies House's items_per_page ceiling
+
+# Search-item field each filter checks.
+_FILTER_FIELDS = {"company_status": "company_status", "company_type": "company_type"}
+
+
+def _search_item(raw: dict[str, Any]) -> CompanySearchItem:
+    return CompanySearchItem(
+        company_number=raw.get("company_number"),
+        title=raw.get("title"),
+        company_status=raw.get("company_status"),
+        company_type=raw.get("company_type"),
+        date_of_creation=raw.get("date_of_creation"),
+        sic_codes=list(raw.get("sic_codes") or []),
+        address=raw.get("address") or raw.get("registered_office_address") or {},
+        description=raw.get("description"),
+    )
+
+
+def _matches(raw: dict[str, Any], filters: dict[str, str]) -> bool:
+    # An item missing the field does not match: unknown is not a match.
+    return all(raw.get(_FILTER_FIELDS[k]) == v for k, v in filters.items())
+
+
+async def _search_companies(
+    query: str, filters: dict[str, str], items_per_page: int, start_index: int,
+) -> CompanySearchResult:
+    """Search Companies House, applying status/type filters on this side.
+
+    Unfiltered, this is one upstream call. Filtered, it pages upstream from
+    start_index until it has items_per_page matches, the upstream results run
+    out, or FILTER_SCAN_CAP results have been read — the last case is reported
+    as is_partial, never as a complete answer.
+    """
+    matches: list[dict[str, Any]] = []
+    offset = start_index
+    scanned = 0
+    upstream_total = 0
+    exhausted = False
+
+    async with companies_house_client() as client:
+        while True:
+            if filters:
+                page_size = min(_SEARCH_PAGE_MAX, FILTER_SCAN_CAP - scanned)
+            else:
+                page_size = items_per_page
+            resp = await _request_with_retry(
+                client, "GET", "/search/companies",
+                params={"q": query, "items_per_page": page_size, "start_index": offset},
+            )
+            data = _json_or_error(resp)
+            upstream_total = int(data.get("total_results", 0) or 0)
+            page = data.get("items", []) or []
+
+            consumed = 0
+            for raw in page:
+                consumed += 1
+                if _matches(raw, filters):
+                    matches.append(raw)
+                    if len(matches) == items_per_page:
+                        break
+            offset += consumed
+            scanned += consumed
+
+            if not page or offset >= upstream_total:
+                exhausted = True
+                break
+            if not filters or len(matches) == items_per_page or scanned >= FILTER_SCAN_CAP:
+                break
+
+    items = [_search_item(raw) for raw in matches]
+    is_partial = bool(filters) and len(items) < items_per_page and not exhausted
+    return CompanySearchResult(
+        query=query,
+        total_results=upstream_total,
+        upstream_total=upstream_total,
+        start_index=start_index,
+        items_per_page=items_per_page,
+        returned=len(items),
+        filtered_returned=len(items),
+        filters_applied=filters,
+        upstream_scanned=scanned,
+        is_partial=is_partial,
+        partial_reason=(
+            f"Scanned {scanned} upstream results (the per-call cap) and found "
+            f"{len(items)} of {items_per_page} requested matches; more may exist. "
+            f"Re-call with start_index={offset} to continue."
+            if is_partial else None
+        ),
+        next_start_index=None if exhausted else offset,
+        has_more=not exhausted,
+        items=items,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 
@@ -142,13 +307,16 @@ def _summarize_has_charges(charges: list[CompanyCharge]) -> bool | None:
 async def _fetch_company_profile(company_number: str) -> CompanyProfile:
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
-        data = resp.json()
+        data = _json_or_error(resp)
 
     has_charges: bool | None = None
     try:
         charges_result = await _fetch_company_charges(company_number)
         has_charges = _summarize_has_charges(charges_result.charges)
-    except (ToolError, httpx.HTTPError):
+    except (ToolError, httpx.HTTPError, ValueError):
+        # ValueError covers a parse failure in the charges payload: the profile
+        # itself is fine, so has_charges degrades to unknown instead of failing
+        # the whole call.
         logger.warning(
             "charges check failed for %s — has_charges is unknown", company_number
         )
@@ -166,12 +334,12 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
         registered_office_address=data.get("registered_office_address") or {},
         has_charges=has_charges,
         accounts=CompanyAccountsSummary(
-            overdue=bool(accs_raw.get("overdue", False)),
+            overdue=_overdue_flag(accs_raw),
             last_accounts_made_up_to=(accs_raw.get("last_accounts") or {}).get("made_up_to"),
             next_due=accs_raw.get("next_due"),
         ),
         confirmation_statement=CompanyConfirmationStatementSummary(
-            overdue=bool(conf_raw.get("overdue", False)),
+            overdue=_overdue_flag(conf_raw),
             next_due=conf_raw.get("next_due"),
         ),
     )
@@ -186,7 +354,7 @@ async def _confirm_company_exists(company_number: str) -> dict[str, Any]:
     """
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", f"/company/{company_number}")
-        return resp.json()
+        return _json_or_error(resp)
 
 
 async def _fetch_company_officers(
@@ -205,7 +373,7 @@ async def _fetch_company_officers(
                 f"/company/{company_number}/officers",
                 params={"items_per_page": page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -288,7 +456,7 @@ async def _fetch_company_psc(company_number: str) -> CompanyPSCResult:
                 f"/company/{company_number}/persons-with-significant-control",
                 params={"items_per_page": page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -395,7 +563,7 @@ async def _fetch_officer_appointments(officer_id: str) -> OfficerAppointmentsRes
                 f"/officers/{oid}/appointments",
                 params={"items_per_page": requested_page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -505,7 +673,7 @@ async def _fetch_company_charges(company_number: str) -> CompanyChargesResult:
                 f"/company/{company_number}/charges",
                 params={"items_per_page": page_size, "start_index": start_index},
             )
-            data = resp.json()
+            data = _json_or_error(resp)
             if not top:
                 top = data
             page_items = data.get("items", []) or []
@@ -628,7 +796,7 @@ async def _fetch_company_filing_history(
 
     async with companies_house_client() as client:
         resp = await _request_with_retry(client, "GET", attempted.split(" ", 1)[1], params=params)
-        data = resp.json()
+        data = _json_or_error(resp)
 
         status = data.get("filing_history_status")
         if status and str(status).startswith("filing-history-not-available"):
@@ -719,8 +887,8 @@ def register_tools(mcp: FastMCP) -> None:
     )
     async def company_search(
         query: Annotated[str, Field(description="Company name or keyword to search for", min_length=2, max_length=200)],
-        company_status: Annotated[str | None, Field(description="Filter by company status (e.g. 'active', 'dissolved'). Omit to search all.")] = None,
-        company_type: Annotated[str | None, Field(description="Filter by company type (e.g. 'ltd', 'llp'). Omit to search all.")] = None,
+        company_status: Annotated[CompanyStatus | None, Field(description="Only return companies with this status. Applied by this server (Companies House search ignores it); see filters_applied and is_partial. Omit to search all.")] = None,
+        company_type: Annotated[CompanyType | None, Field(description="Only return companies of this Companies House type code. Applied by this server (Companies House search ignores it); see filters_applied and is_partial. Omit to search all.")] = None,
         items_per_page: Annotated[int, Field(description="Number of results to return (max 100). Default 20.", ge=1, le=100)] = 20,
         start_index: Annotated[int, Field(description="Pagination offset. Default 0.", ge=0, le=10000)] = 0,
     ) -> CompanySearchResult:
@@ -730,51 +898,21 @@ def register_tools(mcp: FastMCP) -> None:
         status, incorporation date, and registered address. SIC codes are not
         reliably returned by search; use company_profile for SIC codes.
         Use company_profile for the full record once you have the company
-        number. Re-call with start_index=start_index+items_per_page to
-        fetch the next page.
+        number. Re-call with start_index=next_start_index to fetch the
+        next page.
+
+        company_status / company_type are applied by this server: Companies
+        House's search endpoint ignores them. A filtered call scans upstream
+        pages until it has items_per_page matches or has examined
+        500 upstream results; if it stops at that cap, is_partial is true
+        and fewer items does not mean no more matches exist.
         """
-        qs: dict[str, Any] = {
-            "q": query,
-            "items_per_page": items_per_page,
-            "start_index": start_index,
-        }
+        filters: dict[str, str] = {}
         if company_status:
-            qs["status"] = company_status
+            filters["company_status"] = company_status
         if company_type:
-            qs["type"] = company_type
-
-        async with companies_house_client() as client:
-            resp = await _request_with_retry(client, "GET", "/search/companies", params=qs)
-            data = resp.json()
-
-        raw_items = data.get("items", []) or []
-        total = int(data.get("total_results", 0) or 0)
-
-        items = [
-            CompanySearchItem(
-                company_number=raw.get("company_number"),
-                title=raw.get("title"),
-                company_status=raw.get("company_status"),
-                company_type=raw.get("company_type"),
-                date_of_creation=raw.get("date_of_creation"),
-                sic_codes=list(raw.get("sic_codes") or []),
-                address=raw.get("address") or raw.get("registered_office_address") or {},
-                description=raw.get("description"),
-            )
-            for raw in raw_items
-        ]
-
-        has_more = (start_index + len(items)) < total
-
-        return CompanySearchResult(
-            query=query,
-            total_results=total,
-            start_index=start_index,
-            items_per_page=items_per_page,
-            returned=len(items),
-            has_more=has_more,
-            items=items,
-        )
+            filters["company_type"] = company_type
+        return await _search_companies(query, filters, items_per_page, start_index)
 
     # ------------------------------------------------------------------ #
     # 2. company_profile

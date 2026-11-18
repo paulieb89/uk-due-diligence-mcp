@@ -91,7 +91,8 @@ jobs:
             --remote-only \
             --ha=false \
             --wait-timeout 300 \
-            --image-label "${{ steps.resolve.outputs.checked_out_sha }}"
+            --image-label "${{ steps.resolve.outputs.checked_out_sha }}" \
+            --build-arg GIT_SHA="${{ steps.resolve.outputs.checked_out_sha }}"
 
       - name: Post-deploy health check
         run: |

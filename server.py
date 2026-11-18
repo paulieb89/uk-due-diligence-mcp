@@ -42,7 +42,10 @@ from __future__ import annotations
 
 import os
 import sys
+import tomllib
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
@@ -65,6 +68,27 @@ def _require_env(key: str, required: bool = True) -> str | None:
 
 
 MCP_SERVER_KEY = _require_env("MCP_SERVER_KEY", required=False)
+SERVER_NAME = "uk-due-diligence-mcp"
+
+
+def _project_version() -> str:
+    """The app version, for the MCP handshake (serverInfo.version).
+
+    Without this FastMCP reports its own version (4.1.3) as the server's. The
+    installed distribution's metadata is authoritative; a bare checkout that was
+    never installed falls back to pyproject.toml, which holds the same number.
+    """
+    try:
+        return _pkg_version(SERVER_NAME)
+    except PackageNotFoundError:
+        pyproject = Path(__file__).with_name("pyproject.toml")
+        return tomllib.loads(pyproject.read_text())["project"]["version"]
+
+
+SERVER_VERSION = _project_version()
+# Commit the image was built from, passed as a Docker build arg by the deploy
+# workflows. "unknown" means a build that did not pass it (e.g. a local build).
+GIT_SHA = os.environ.get("GIT_SHA") or "unknown"
 PORT = int(os.environ.get("PORT", "8080"))
 
 # ---------------------------------------------------------------------------
@@ -72,7 +96,8 @@ PORT = int(os.environ.get("PORT", "8080"))
 # ---------------------------------------------------------------------------
 
 mcp = FastMCP(
-    name="uk_due_diligence_mcp",
+    name=SERVER_NAME,
+    version=SERVER_VERSION,
     instructions=(
         "UK due diligence server covering official government registers plus consolidated "
         "sanctions lists: Companies House, Charity Commission, HMLR Land Registry, The Gazette, "
@@ -116,7 +141,7 @@ mcp = FastMCP(
 
 @mcp.custom_route("/health", methods=["GET"])
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "version": SERVER_VERSION, "git_sha": GIT_SHA})
 
 
 @mcp.custom_route("/.well-known/mcp/server-card.json", methods=["GET"])

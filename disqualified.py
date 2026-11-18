@@ -16,7 +16,7 @@ from pydantic import Field
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
-from http_client import _request_with_retry, companies_house_client
+from http_client import _json_or_error, _request_with_retry, companies_house_client
 from mcpfleet_obs import parse_error_payload, raise_http_tool_error, raise_tool_error
 from models import (
     DisqualificationOrder,
@@ -87,7 +87,7 @@ def register_tools(mcp: FastMCP) -> None:
                         "start_index": start_index,
                     },
                 )
-                data = resp.json()
+                data = _json_or_error(resp)
         except ToolError:
             # Already a structured fleet error (e.g. missing CH_API_KEY,
             # persistent 429/503) — propagate as-is rather than masking it
@@ -161,7 +161,7 @@ async def _fetch_disqualified_profile(officer_id: str) -> DisqualifiedProfile:
         try:
             async with companies_house_client() as client:
                 resp = await _request_with_retry(client, "GET", endpoint)
-                data = resp.json()
+                data = _json_or_error(resp)
                 officer_kind = kind
                 break
         except ToolError as exc:

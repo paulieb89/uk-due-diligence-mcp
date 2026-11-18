@@ -14,7 +14,7 @@ from pydantic import Field
 from fastmcp import FastMCP
 
 from fastmcp.exceptions import ToolError
-from http_client import _request_with_retry, gazette_client
+from http_client import _json_or_error, _request_with_retry, gazette_client
 from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 from models import GazetteInsolvencyResult, GazetteNotice
 
@@ -147,7 +147,7 @@ async def _fetch_gazette_notice(notice_id: str) -> dict:
             params={"view": "linked-data"},
             headers={"Accept": "application/json"},
         )
-    return resp.json()
+    return _json_or_error(resp)
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ def register_tools(mcp: FastMCP) -> None:
                 resp = await _request_with_retry(
                     client, "GET", "/insolvency/notice/data.json", params=qs
                 )
-                raw = resp.json()
+                raw = _json_or_error(resp)
                 entries = raw.get("entry", []) if isinstance(raw, dict) else []
                 if isinstance(entries, dict):
                     entries = [entries]

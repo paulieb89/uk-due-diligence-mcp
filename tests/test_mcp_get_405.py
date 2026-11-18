@@ -41,7 +41,10 @@ def test_post_initialize_succeeds_without_any_get_stream():
         )
 
     assert resp.status_code == 200
-    assert resp.json()["result"]["serverInfo"]["name"] == "uk_due_diligence_mcp"
+    server_info = resp.json()["result"]["serverInfo"]
+    assert server_info["name"] == "uk-due-diligence-mcp"
+    # The app version, not FastMCP's own (it used to report 4.1.3).
+    assert server_info["version"] == server.SERVER_VERSION
 
 
 def test_accept_normaliser_still_admits_a_bare_accept_header():
@@ -54,9 +57,18 @@ def test_accept_normaliser_still_admits_a_bare_accept_header():
     assert resp.status_code == 200
 
 
-def test_health_reports_status_only():
+def test_health_reports_status_version_and_build_commit(monkeypatch):
+    monkeypatch.setattr(server, "GIT_SHA", "abc123")
     with _client() as c:
         resp = c.get("/health")
 
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {"status": "ok", "version": server.SERVER_VERSION, "git_sha": "abc123"}
+
+
+def test_server_version_is_the_project_version():
+    import tomllib
+    from pathlib import Path
+
+    pyproject = tomllib.loads((Path(server.__file__).parent / "pyproject.toml").read_text())
+    assert server.SERVER_VERSION == pyproject["project"]["version"]

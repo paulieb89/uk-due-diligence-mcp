@@ -23,6 +23,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from http_client import (
+    _json_or_error,
     _request_with_retry,
     companies_house_client,
     gazette_client,
@@ -44,7 +45,7 @@ async def _company_ids(query: str) -> list[str]:
             client, "GET", "/search/companies",
             params={"q": query, "items_per_page": 10},
         )
-    items = resp.json().get("items") or []
+    items = _json_or_error(resp).get("items") or []
     return [f"company:{item['company_number']}" for item in items if item.get("company_number")]
 
 
@@ -64,7 +65,7 @@ async def _disqualified_ids(query: str) -> list[str]:
             client, "GET", "/search/disqualified-officers",
             params={"q": query, "items_per_page": 5},
         )
-    items = resp.json().get("items") or []
+    items = _json_or_error(resp).get("items") or []
     ids = []
     for item in items:
         links = item.get("links") or {}
@@ -82,7 +83,7 @@ async def _gazette_ids(query: str) -> list[str]:
             client, "GET", "/insolvency/notice/data.json",
             params={"text": query, "results-page-size": 5},
         )
-    raw = resp.json()
+    raw = _json_or_error(resp)
     entries = raw.get("entry", []) if isinstance(raw, dict) else []
     if isinstance(entries, dict):
         entries = [entries]
