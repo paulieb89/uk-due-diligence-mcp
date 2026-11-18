@@ -1,7 +1,7 @@
 """
 models.py — Pydantic v2 output models for uk-due-diligence-mcp tools.
 
-Wrapper + item models returned by the 11 tools in this server. Each
+Wrapper + item models returned by this server's tools. Each
 domain has its own section. Every Field has a description so the
 auto-generated outputSchema advertised by FastMCP is self-documenting.
 
