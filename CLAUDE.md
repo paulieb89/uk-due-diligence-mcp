@@ -45,25 +45,10 @@ Then `uv lock`, and add a `## [X.Y.Z] — YYYY-MM-DD` entry to `CHANGELOG.md`
 `uv sync` locally too: the handshake version comes from installed package
 metadata, and a stale `.venv` fails `test_server_version_is_the_project_version`.
 
-Release gates, one repo at a time:
-- The only approval gate is `gh release create`. Feature and release-prep PRs
-  may be merged once the suite passes; there is no PR CI yet (#43), so run
-  `uv run pytest -m "not live" -q` and `check_invariants.py --standalone` locally.
-- After merging, before tagging: staging redeploys from `main`; confirm
-  `/health` `git_sha` is the merge commit and `tests/live/validation_audit_calls.py`
-  passes.
-- Before asking for the gate, state the rollback: the previous Fly image
-  (`fly releases -a uk-due-diligence-mcp --image`), the command
-  (`FLY_DEPLOY_ACK=1 fly deploy -a uk-due-diligence-mcp --image <previous>`),
-  and the PyPI yank page (`https://pypi.org/manage/project/uk-due-diligence-mcp/release/<version>/`
-  — yanking is web-only).
-- After release: prod `/health` shows the version and the tag's SHA,
-  `scripts/check-deploy-drift.sh` passes, and the live script passes against
-  prod and through uk-business-mcp (a live proxy, no PyPI pin; tools prefixed
-  `dd_`). If any check fails, stop and give the rollback.
-- A branch staging deploy must run the branch's workflow:
-  `gh workflow run deploy-staging.yml --ref <branch> -f ref=<branch>`
-  (`--ref main` runs main's workflow file).
+Release gates — one approval gate at `gh release create`, one repo at a time,
+rollback stated before the gate, staging re-verified from `main` before tagging,
+prod and proxy checks after — and the step-by-step procedure live in the
+`/release` skill (`.claude/skills/release/SKILL.md`).
 
 The version triad is asserted mechanically — see Invariants below — and
 `release.yml` additionally checks it against the release tag, so neither a bump
