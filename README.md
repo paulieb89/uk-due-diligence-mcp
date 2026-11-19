@@ -1,5 +1,7 @@
 # uk-due-diligence-mcp
 
+Maintained by BOUCH — private hosting, custom tools and setup: paul@bouch.dev · [bouch.dev/products/uk-due-diligence-mcp](https://bouch.dev/products/uk-due-diligence-mcp)
+
 <!-- mcp-name: io.github.paulieb89/uk-due-diligence-mcp -->
 
 **Official-source UK due-diligence data for AI agents.**
