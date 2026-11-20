@@ -72,6 +72,8 @@ Foreman, the software factory behind `eve-sf-app`, also works on this repo.
 - **The issue is the spec.** Put the decision and the scope in the issue before
   labelling it. If it leaves a behaviour decision open (e.g. #26, #29), state the
   chosen behaviour first.
+- **Who labels.** Label `factory` only for single-repo, testable work; a
+  maintainer applies it after review.
 - **GitHub only.** Each run clones `origin/main`, so push work before labelling
   an issue that depends on it. Don't push to `factory/*` branches by hand.
 - **It never merges.** Its PRs are drafts. `Non-live tests` must pass (the
