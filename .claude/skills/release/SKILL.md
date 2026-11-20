@@ -20,6 +20,8 @@ a paraphrase here. A hand-run `fly deploy` is refused by
   `uv run --no-sync python .claude/hooks/check_invariants.py --standalone` and
   `uv run --no-sync python scripts/gen_reference.py --check` locally first is
   optional, a quicker check rather than a requirement.
+- **Foreman PRs arrive as drafts.** Review the draft, then mark it ready with
+  `gh pr ready <n>` before it reaches the merge gate.
 - **One repo at a time.** Release, verify prod, then start the next repo. If
   any prod check fails, stop, give the rollback, and do not release the next.
 - **Staging from `main` before tagging.** After the prep PR merges, staging

@@ -1,5 +1,5 @@
 ---
-allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git grep:*), Bash(ls:*), Bash(grep:*), Bash(head:*), Bash(tail:*), Bash(sort:*), Bash(uniq:*), Bash(uv run:*), Read
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(git grep:*), Bash(ls:*), Bash(grep:*), Bash(head:*), Bash(tail:*), Bash(sort:*), Bash(uniq:*), Bash(uv run:*), Bash(gh issue list --state open), Bash(gh pr list --state open --json number,title,isDraft,headRefName), Read
 argument-hint: [focus-area]
 description: Load current repo state - git activity, work in flight, verification status
 ---
@@ -13,6 +13,8 @@ description: Load current repo state - git activity, work in flight, verificatio
 - Hotspots (30 commits): !`git log --pretty=format: --name-only -30 | grep -v '^$' | sort | uniq -c | sort -rg | head -8`
 
 ## Work in flight
+- Open issues: !`gh issue list --state open`
+- Open PRs (Foreman drafts are on `factory/*`): !`gh pr list --state open --json number,title,isDraft,headRefName`
 - Repo plans (newest first): !`ls -t docs/plans | head -5`
 - Backlog (top 3 live): !`grep -m 3 "^- [^~]" docs/BACKLOG.md`
 - Markers in source (blank = none): !`git grep -n "TODO\|FIXME" -- '*.py' '*.sh' '*.toml' '*.yml' '*.yaml' 'Dockerfile*' | head -8`
