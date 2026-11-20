@@ -1,0 +1,29 @@
+name: CI
+
+# Pull-request checks, modelled on uk-legal-mcp's ci.yml. release.yml and
+# deploy-staging.yml only run after merge; this gates PRs before they land.
+# The job name "Non-live tests" is the required status check on main.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Non-live tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv lock --check
+      - run: uv sync --frozen --group dev
+      # Version triad, port and routes.
+      - run: uv run python .claude/hooks/check_invariants.py --standalone
+      - run: uv run python scripts/gen_reference.py --check
+      - run: uv run pytest -m "not live" -q
