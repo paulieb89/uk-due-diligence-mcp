@@ -32,9 +32,10 @@ that doc lands; it is a placeholder with a forwarding address, not a resident.
 
 > A verified, citable claim about platform or repo behaviour → **FIELD-NOTES**
 > (evidence required — a citation, a measurement, or both). Something small,
-> real and non-blocking → one line in **`docs/BACKLOG.md`**, triaged into a plan
-> when picked up. Anything touching multiple files with a genuine design
-> tradeoff → a plan in **`docs/plans/`**, using `docs/plans/TEMPLATE-handoff.md`.
+> real and non-blocking → a **GitHub issue** (issues are the only work queue;
+> `docs/BACKLOG.md` was archived 2026-11-20). Anything touching multiple files
+> with a genuine design tradeoff → a plan in **`docs/plans/`**, using
+> `docs/plans/TEMPLATE-handoff.md`, linked from its issue.
 > A FIELD-NOTES entry that has stabilised into a permanent constraint, rather
 > than a one-off discovery → **promote it into something that actually runs** —
 > a hook, a `check_invariants.py` check, a committed test — rather than leaving
@@ -42,8 +43,8 @@ that doc lands; it is a placeholder with a forwarding address, not a resident.
 
 The last clause is the one with no mechanism behind it: nothing currently
 detects a note that has earned promotion, so it stays a habit until something
-enforces it. Filed in `docs/BACKLOG.md` (2026-09-08) as this file's open
-location-and-maturity question.
+enforces it. Filed 2026-09-08 as this file's open location-and-maturity
+question; now #72.
 
 ---
 

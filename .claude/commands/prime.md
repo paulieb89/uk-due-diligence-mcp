@@ -15,8 +15,7 @@ description: Load current repo state - git activity, work in flight, verificatio
 ## Work in flight
 - Open issues: !`gh issue list --state open`
 - Open PRs (Foreman drafts are on `factory/*`): !`gh pr list --state open --json number,title,isDraft,headRefName`
-- Repo plans (newest first): !`ls -t docs/plans | head -5`
-- Backlog (top 3 live): !`grep -m 3 "^- [^~]" docs/BACKLOG.md`
+- Active plans (blank = none): !`grep -l "^status: active" docs/plans/*.md | head -5`
 - Markers in source (blank = none): !`git grep -n "TODO\|FIXME" -- '*.py' '*.sh' '*.toml' '*.yml' '*.yaml' 'Dockerfile*' | head -8`
 - Uncommitted diff shape: !`git diff HEAD --stat | tail -5`
 

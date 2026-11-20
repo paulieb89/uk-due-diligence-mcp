@@ -12,6 +12,7 @@ something spans multiple sessions and might need a later correction.
     repo: <repo-name>
     date: <YYYY-MM-DD>
     supersedes: <prior file, or "none">
+    issue: <#N — the issue this plan serves; the issue links back here>
     sessions: <which sessions touched this>
     ---
 
@@ -178,7 +179,8 @@ an omitted section reads as forgotten; a stated "none" reads as checked.
 
 - A verified, citable claim about platform or repo behaviour → FIELD-NOTES,
   not any of these three.
-- Something small, real, non-blocking → one line in `docs/BACKLOG.md`.
+- Something small, real, non-blocking → a GitHub issue (no `factory` label;
+  a maintainer applies it after review). Issues are the only work queue.
 - A real decision, investigation, or multi-session thread → Shape A.
 - A small, fully-diagnosed, low-blast-radius fix → Shape B.
 - Touches a live, paid, or production system, or needs explicit do-not-touch
