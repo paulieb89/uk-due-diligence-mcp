@@ -224,6 +224,35 @@ def check_absolute_paths() -> list[str]:
     ]
 
 
+def _edit_in_repo(payload: object) -> bool:
+    """True only when the hook payload names a file inside ROOT.
+
+    The Write|Edit|MultiEdit matcher has no path predicate, so an edit in a
+    sibling repo fires this hook too. Without this guard it re-asserted *this*
+    repo's invariants and exited 0 — a green light from a repo the edit never
+    touched (measured 2026-09-09 against mcpfleet-obs).
+
+    Containment is component-aware on resolved paths, matching
+    post_edit_python.py: a string prefix would accept a sibling named
+    `<repo>-other`, and skipping resolve() would let `..` or a symlink escape.
+    Anything that cannot be interpreted fails open (False), like the rest of
+    this file.
+    """
+    if not isinstance(payload, dict):
+        return False
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    file_path = tool_input.get("file_path")
+    if not isinstance(file_path, str) or not file_path:
+        return False
+    try:
+        Path(file_path).resolve().relative_to(ROOT)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Assert this repo's invariants.")
     # --standalone is load-bearing, not a convenience: as a hook this reads stdin
@@ -244,9 +273,11 @@ def main() -> int:
 
     if not args.standalone:
         try:
-            json.load(sys.stdin)
+            payload = json.load(sys.stdin)
         except Exception:
             return 0  # unparseable input: no opinion
+        if not _edit_in_repo(payload):
+            return 0  # edit outside this repo: not ours to judge
 
     problems: list[str] = []
     for check in (
