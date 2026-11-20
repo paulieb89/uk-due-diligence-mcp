@@ -237,6 +237,12 @@ def _edit_in_repo(payload: object) -> bool:
     `<repo>-other`, and skipping resolve() would let `..` or a symlink escape.
     Anything that cannot be interpreted fails open (False), like the rest of
     this file.
+
+    Resolution is strict: Path.resolve() with strict=False does not raise on a
+    symlink loop on every Python (3.14 returns the unresolved path, which still
+    sits under ROOT), so a loop would wrongly count as "inside". Only the
+    deepest *existing* ancestor is resolved — strictly — and the not-yet-created
+    tail is appended, so a Write that creates new directories still counts.
     """
     if not isinstance(payload, dict):
         return False
@@ -247,10 +253,41 @@ def _edit_in_repo(payload: object) -> bool:
     if not isinstance(file_path, str) or not file_path:
         return False
     try:
-        Path(file_path).resolve().relative_to(ROOT)
+        resolved = _resolve_strict_prefix(Path(file_path))
+        if resolved is None:
+            return False
+        resolved.relative_to(ROOT)
     except (OSError, ValueError, RuntimeError):
         return False
     return True
+
+
+def _resolve_strict_prefix(path: Path) -> Path | None:
+    """Resolve `path` strictly, tolerating only a nonexistent trailing tail.
+
+    Returns None when the path cannot be resolved trustworthily: a dangling
+    symlink (its target could be anywhere) or a `..` inside the nonexistent
+    tail (it cannot be resolved without the components it climbs out of).
+    Any other resolution failure, including a symlink loop, raises OSError or
+    RuntimeError for the caller to treat as unresolvable.
+    """
+    current = path if path.is_absolute() else Path.cwd() / path
+    tail: list[str] = []
+    while True:
+        try:
+            base = current.resolve(strict=True)
+            break
+        except FileNotFoundError:
+            if current.is_symlink():
+                return None  # dangling symlink
+            parent = current.parent
+            if parent == current:
+                return None
+            tail.append(current.name)
+            current = parent
+    if ".." in tail:
+        return None
+    return base.joinpath(*reversed(tail))
 
 
 def main() -> int:
@@ -258,7 +295,8 @@ def main() -> int:
     # --standalone is load-bearing, not a convenience: as a hook this reads stdin
     # and fails open on anything unparseable, and CI supplies no payload at all —
     # so without the flag every CI run would exit 0 having checked nothing, which
-    # is worse than no gate. The PostToolUse path below is unchanged.
+    # is worse than no gate. The PostToolUse path reads the payload and skips the
+    # checks entirely when the edited file is not inside this repo (_edit_in_repo).
     parser.add_argument(
         "--standalone", action="store_true",
         help="run with no hook payload (CI, /verify)",

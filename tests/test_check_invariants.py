@@ -125,6 +125,46 @@ def test_symlink_inside_repo_pointing_outside_is_outside(hook, monkeypatch, tmp_
     assert hook.calls == list(CHECKS)
 
 
+def test_symlink_loop_is_unresolvable_and_runs_no_checks(hook, monkeypatch, tmp_path):
+    # Path.resolve(strict=False) on Python 3.14 returns ROOT/loop/file.py unchanged
+    # for a self-referential link instead of raising, which would count as inside.
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(hook, "ROOT", root.resolve())
+    loop = root / "loop"
+    try:
+        os.symlink(loop, loop)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    assert _run(hook, monkeypatch, [], _payload(str(loop / "file.py"))) == 0
+    assert hook.calls == []
+    assert _run(hook, monkeypatch, ["--expect", "v1.0.0"], _payload(str(loop / "file.py"))) == 0
+    assert hook.calls == []
+
+
+def test_dangling_symlink_inside_repo_runs_no_checks(hook, monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(hook, "ROOT", root.resolve())
+    link = root / "dangling"
+    try:
+        os.symlink(tmp_path / "nowhere" / "target", link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    assert _run(hook, monkeypatch, [], _payload(str(link / "file.py"))) == 0
+    assert hook.calls == []
+
+
+def test_new_file_in_new_directories_inside_repo_runs_checks(hook, monkeypatch, tmp_path):
+    # Nonexistent components are still supported: a Write creating new dirs counts.
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(hook, "ROOT", root.resolve())
+    new_file = root / "new" / "deeper" / "file.py"
+    assert _run(hook, monkeypatch, [], _payload(str(new_file))) == 0
+    assert hook.calls == list(CHECKS)
+
+
 @pytest.mark.parametrize(
     "raw",
     [
