@@ -14,10 +14,12 @@ a paraphrase here. A hand-run `fly deploy` is refused by
 ## Gates (shared with uk-legal-mcp and uk-business-mcp)
 
 - **One approval gate: `gh release create`.** Feature and release-prep PRs
-  may be merged once the suite passes. There is no PR CI yet (#43), so run
+  may be merged once the `Non-live tests` check (`ci.yml`) is green; the
+  "main: pull request + CI" ruleset requires it. Running
   `uv run --no-sync pytest -m "not live" -q`,
   `uv run --no-sync python .claude/hooks/check_invariants.py --standalone` and
-  `uv run --no-sync python scripts/gen_reference.py --check` locally first.
+  `uv run --no-sync python scripts/gen_reference.py --check` locally first is
+  optional, a quicker check rather than a requirement.
 - **One repo at a time.** Release, verify prod, then start the next repo. If
   any prod check fails, stop, give the rollback, and do not release the next.
 - **Staging from `main` before tagging.** After the prep PR merges, staging
@@ -40,8 +42,8 @@ a paraphrase here. A hand-run `fly deploy` is refused by
    `.venv` fails `test_server_version_is_the_project_version`). Confirm with
    `check_invariants.py --standalone --expect vX.Y.Z`.
 5. Add a `## [X.Y.Z] — YYYY-MM-DD` entry to `CHANGELOG.md`.
-6. Run the local checks above, open the PR, merge it with a merge commit
-   (`gh pr merge --merge`, this repo's convention; precedent: #42).
+6. Open the PR, wait for `Non-live tests` to pass, then merge it with a merge
+   commit (`gh pr merge --merge`, this repo's convention; precedent: #42).
 7. Watch `deploy-staging.yml` for the merge commit, then check staging
    `/health` (version and `git_sha` == merge commit) and run
    `uv run --no-sync python tests/live/validation_audit_calls.py`.
