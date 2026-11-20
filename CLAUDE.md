@@ -59,6 +59,32 @@ was built by CI from the **latest release tag**. Prod is release-gated, so main
 running ahead between releases is normal — the script reports that distance as
 information and still exits 0.
 
+## Foreman
+
+Foreman, the software factory behind `eve-sf-app`, also works on this repo.
+
+- **Starting it.** The `factory` label on an issue starts an unattended run that
+  ends in a draft PR on a `factory/<issue>-...` branch, or in clarifying
+  questions if the issue is unclear. Mentioning `@eve-sf-app` on an issue or PR
+  starts an attended run: use it for a narrowly scoped follow-up, or to save a
+  note to Foreman's memory for this repo. Only the owner and collaborators can
+  start either.
+- **The issue is the spec.** Put the decision and the scope in the issue before
+  labelling it. If it leaves a behaviour decision open (e.g. #26, #29), state the
+  chosen behaviour first.
+- **GitHub only.** Each run clones `origin/main`, so push work before labelling
+  an issue that depends on it. Don't push to `factory/*` branches by hand.
+- **It never merges.** Its PRs are drafts. `Non-live tests` must pass (the
+  ruleset requires it); merge with `gh pr merge --merge`. Each merge deploys
+  staging only.
+- **Dependencies.** Commit `uv.lock` with any dependency change. The sandbox runs
+  `uv sync --group dev --frozen` on Python 3.14 before every run, so a stale lock,
+  or a dependency without Python 3.14 wheels, fails every run at setup even when
+  CI (3.12) passes.
+- **Following a run.** Progress and the result are posted as issue comments.
+- **Not in this repo.** Changes to how Foreman behaves go in
+  `paulieb89/factory-agent`, not here.
+
 ## Invariants
 
 - `/health` returns `status`, `version` and `git_sha`. `GIT_SHA` is a Docker
