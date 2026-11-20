@@ -9,8 +9,8 @@ trust a count in prose — run `uv run --no-sync fastmcp inspect server.py:mcp`
 `docs/tool-reference.md` is generated: `uv run --no-sync python scripts/gen_reference.py`
 captures the surface with `fastmcp inspect` and rewrites only the tables between
 `GENERATED` markers (title annotation + first sentence of the description). A new
-tool namespace needs its own marker block. `--check` (run in `release.yml`; and in PR
-CI once #43 lands) fails on drift or on a tool missing from every table. The script
+tool namespace needs its own marker block. `--check` (run in `ci.yml` on every PR and
+push to main, and in `release.yml`) fails on drift or on a tool missing from every table. The script
 is shared verbatim with uk-legal-mcp and uk-business-mcp.
 
 - **GitHub:** `paulieb89/uk-due-diligence-mcp`
@@ -75,7 +75,7 @@ information and still exits 0.
 These are enforced by `.claude/hooks/check_invariants.py`, not just documented
 here. It runs two ways: as a `PostToolUse` hook (wired in `.claude/settings.json`)
 after an agent edit, and with `--standalone` as a standing assertion in `/verify`,
-in `deploy-staging.yml` on every push to main, and in `release.yml` before the
+in `ci.yml` on every PR and push to main, in `deploy-staging.yml` on every push to main, and in `release.yml` before the
 PyPI publish (there with `--expect <tag>`, which anchors the triad to the release
 tag — self-consistent files pinned to the wrong version is still drift). The hook path only sees `Write|Edit|MultiEdit`, so a `sed`, a vim
 edit or a merge bypasses it — the standalone runs are what cover the tree at rest.
