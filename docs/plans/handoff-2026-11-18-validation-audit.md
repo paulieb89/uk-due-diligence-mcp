@@ -62,6 +62,8 @@ audit plus the residual unstructured errors in #37, and ship them. Template:
 
 ## Recommended next step
 
+**AMENDED 2026-11-20:** #43 closed (PR CI, built by Foreman). Ordering of open work now lives on the issues, not here — see `gh issue list`. Below is the record as of 2026-11-18.
+
 **AMENDED 2026-11-18:** first FastMCP 4.1.3 → 4.1.8 (#49) with legal and govuk, so the fleet runs one patch, then a stdio entry point (#51, copying uk-legal-mcp's `main_stdio`). Previously:
 
 #43: PR CI modelled on uk-legal-mcp's `ci.yml` (suite, invariants,

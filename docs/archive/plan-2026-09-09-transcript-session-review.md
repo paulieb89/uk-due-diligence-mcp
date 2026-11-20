@@ -1,4 +1,5 @@
 ---
+status: superseded (2026-11-20, never built; archived; fixture decision in #73, hook-denial logging in #62)
 repo: uk-due-diligence-mcp
 date: 2026-09-09
 purpose: Build a tested, transcript-based session review; no hook registration.
