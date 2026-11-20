@@ -59,6 +59,14 @@ was built by CI from the **latest release tag**. Prod is release-gated, so main
 running ahead between releases is normal — the script reports that distance as
 information and still exits 0.
 
+## Work queue and handoffs
+
+GitHub issues are the only work queue; `/prime` lists open issues and PRs. A
+handoff long enough to need a file goes in `docs/plans/` (shape and frontmatter
+in `docs/plans/TEMPLATE-handoff.md`), linked from its issue. Plans with
+`status: active` are current; read a handoff as a claim as of its `as_of`
+commit, not as current truth. `docs/archive/` is frozen. Don't edit it.
+
 ## Foreman
 
 Foreman, the software factory behind `eve-sf-app`, also works on this repo.
@@ -76,9 +84,11 @@ Foreman, the software factory behind `eve-sf-app`, also works on this repo.
   maintainer applies it after review.
 - **GitHub only.** Each run clones `origin/main`, so push work before labelling
   an issue that depends on it. Don't push to `factory/*` branches by hand.
-- **It never merges.** Its PRs are drafts. `Non-live tests` must pass (the
-  ruleset requires it); merge with `gh pr merge --merge`. Each merge deploys
-  staging only.
+- **It never marks ready, merges or releases.** Its PRs are drafts: review the
+  draft, mark it ready with `gh pr ready <n>`, and merge with
+  `gh pr merge --merge` once `Non-live tests` passes (the ruleset requires it).
+  Each merge deploys staging only; prod changes only through the `/release`
+  skill, after maintainer approval.
 - **Dependencies.** Commit `uv.lock` with any dependency change. The sandbox runs
   `uv sync --group dev --frozen` on Python 3.14 before every run, so a stale lock,
   or a dependency without Python 3.14 wheels, fails every run at setup even when
