@@ -79,6 +79,8 @@ Local stdio mode isn't supported yet ([#51](https://github.com/paulieb89/uk-due-
 
 ## Tools
 
+The authoritative, generated list of tools and resources is [docs/tool-reference.md](docs/tool-reference.md); the tables below are a guide.
+
 **Companies House**
 
 | Tool | Description |
@@ -89,6 +91,8 @@ Local stdio mode isn't supported yet ([#51](https://github.com/paulieb89/uk-due-
 | `company_psc` | Beneficial owners, PSC chain, overseas-corporate-PSC flag |
 | `officer_appointments` | Full appointment history for a person by `officer_id` — including dissolved or insolvent companies not named anywhere else |
 | `company_charges` | Complete secured-charge history: status, dates, secured parties, what each charge covers |
+| `company_filing_history` | One page of a company's filing chronology (form types, dates); narrow with `category` |
+| `company_filing_document` | Resolve a filing's `document_metadata` link to its source document, returned as a `company-document://` resource link |
 | `disqualified_search` | Search disqualified directors by name |
 | `disqualified_profile` | Full disqualification record: period, Act, associated companies |
 
@@ -118,7 +122,7 @@ Local stdio mode isn't supported yet ([#51](https://github.com/paulieb89/uk-due-
 |------|-------------|
 | `sanctions_screen` | Screen a name against the UK (FCDO), OFAC, EU and UN consolidated lists |
 
-The UK list is the FCDO UK Sanctions List XML and is reported under the label `OFSI (UK)`. The parser refuses an incomplete export: a file with fewer than 5,000 designations, a drop of more than 10% against the previous load in the same process, a duplicate `UniqueID`, or a missing `DateGenerated` fails the UK list, which is then reported in `lists_unavailable` with `is_partial` true. The floor and drop threshold are constants in `sanctions.py`.
+The UK list is the FCDO UK Sanctions List XML and is reported under the label `OFSI (UK)`. The parser refuses an incomplete export: a file below a minimum designation count, a sharp drop against the previous load in the same process, a duplicate `UniqueID`, or a missing `DateGenerated` fails the UK list, which is then reported in `lists_unavailable` with `is_partial` true. The floor and drop threshold are constants in `sanctions.py`.
 
 **Cross-register**
 
@@ -173,28 +177,6 @@ Things worth knowing before trusting output:
 | `CHARITY_API_KEY` | Charity Commission tools | [api-portal.charitycommission.gov.uk](https://api-portal.charitycommission.gov.uk) — free |
 
 HMLR, The Gazette, and the sanctions lists require no credentials.
-
----
-
-## Project structure
-
-```
-uk-due-diligence-mcp/
-├── server.py           # FastMCP init, tool/resource registration, transport config
-├── companies_house.py  # company_search/profile/officers/psc, officer_appointments, company_charges
-├── disqualified.py     # disqualified_search, disqualified_profile
-├── charity.py          # charity_search, charity_profile
-├── land_registry.py    # land_title_search (SPARQL Price Paid Index)
-├── gazette.py          # gazette_insolvency, gazette_notice
-├── sanctions.py        # sanctions_screen (UK/OFAC/EU/UN consolidated lists)
-├── search_fetch.py     # search, fetch (cross-register fan-out)
-├── models.py           # Pydantic v2 output models
-├── http_client.py      # Shared httpx clients, retry backoff, error formatting
-├── fly.toml
-├── Dockerfile
-├── pyproject.toml
-└── .env.example
-```
 
 ---
 

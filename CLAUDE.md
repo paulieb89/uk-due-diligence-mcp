@@ -2,7 +2,7 @@
 
 FastMCP server over 5 UK registers — Companies House, Charity Commission,
 The Gazette, HMLR Land Registry, and OFSI/OFAC/EU/UN sanctions.
-Flat layout: `server.py` registers 8 domain modules. For the live tool list don't
+Flat layout: `server.py` registers the domain modules. For the live tool list don't
 trust a count in prose — run `uv run --no-sync fastmcp inspect server.py:mcp`
 (add `--format fastmcp -o manifest.json` for the full JSON).
 
@@ -40,7 +40,7 @@ an agent reads the refusal and could otherwise set the variable itself.
 Bumping a version means editing **three** files or the registries drift (this has
 happened — see `daaa9dc`, and again at v1.3.0):
 `pyproject.toml`, `server.py` (`smithery_server_card`), `server.json` (×2).
-Then `uv lock`, and add a `## [X.Y.Z] — YYYY-MM-DD` entry to `CHANGELOG.md`
+Then `uv lock`, and rename `## [Unreleased]` in `CHANGELOG.md` to a `## [X.Y.Z] — YYYY-MM-DD` entry
 (started at 1.7.0; name breaking changes under `### Breaking`). After `uv lock`,
 `uv sync` locally too: the handshake version comes from installed package
 metadata, and a stale `.venv` fails `test_server_version_is_the_project_version`.

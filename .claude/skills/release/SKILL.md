@@ -43,7 +43,7 @@ a paraphrase here. A hand-run `fly deploy` is refused by
    (the handshake version comes from installed package metadata; a stale
    `.venv` fails `test_server_version_is_the_project_version`). Confirm with
    `check_invariants.py --standalone --expect vX.Y.Z`.
-5. Add a `## [X.Y.Z] — YYYY-MM-DD` entry to `CHANGELOG.md`.
+5. Rename `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] — YYYY-MM-DD` (add any missing items), and start a fresh empty `## [Unreleased]` only when the next change lands.
 6. Open the PR, wait for `Non-live tests` to pass, then merge it with a merge
    commit (`gh pr merge --merge`, this repo's convention; precedent: #42).
 7. Watch `deploy-staging.yml` for the merge commit, then check staging
