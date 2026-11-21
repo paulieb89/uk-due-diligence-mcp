@@ -1216,15 +1216,35 @@ class GazetteInsolvencyResult(BaseModel):
         None, description="Upper bound of the date range filter, if any."
     )
     total_notices: int = Field(
-        ..., description="Total notices returned after deduplication, sorting, and cap."
+        ..., description="Notices returned by this call, after the notice_type filter, sorting, and cap. Not the feed total (see upstream_total)."
     )
     max_notices_cap: int = Field(
         ..., description="The max_notices cap applied. Upstream may have more matching notices."
     )
+    upstream_total: int | None = Field(
+        None,
+        description=(
+            "The Gazette feed's count of matching corporate insolvency notices (f:total), "
+            "across all pages and before the local notice_type filter. Null when the "
+            "feed does not report it (unknown, not zero)."
+        ),
+    )
+    page: int = Field(
+        1, description="The 1-based feed page read by this call (up to 100 entries per page)."
+    )
+    is_partial: bool = Field(
+        True,
+        description=(
+            "True when upstream_total exceeds the feed entries read on this page, or "
+            "when upstream_total is unknown. It compares the page with the whole feed "
+            "only: notices dropped by notice_type or max_notices do not set it. On page "
+            "2 or later it can stay true on the last page. Re-call with page+1 to read on."
+        ),
+    )
     notices: list[GazetteNotice] = Field(
         default_factory=list,
         description=(
-            "Matching notices, sorted by severity (desc) then date (desc)."
+            "Matching notices from this page, sorted by severity (desc) then date (desc)."
         ),
     )
 
