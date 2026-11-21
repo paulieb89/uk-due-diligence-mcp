@@ -234,8 +234,8 @@ async def test_page_two_sends_results_page_and_corporate_category(monkeypatch, m
     assert params["results-page-size"] == "100"
     assert params["text"] == "carillion"
     assert data["page"] == 2
-    # 98 entries on page 2 of 198: compared with this call's entries only.
-    assert data["is_partial"] is True
+    # 100 on page 1 + 98 here = 198: nothing remains after this page.
+    assert data["is_partial"] is False
 
 
 @pytest.mark.asyncio
@@ -263,3 +263,31 @@ async def test_page_below_one_is_rejected_before_any_request(monkeypatch, mcp_cl
         await _call(mcp_client, page=page)
 
     assert feed.requests == []
+
+
+# Shape observed live 2026-11-21 for text=carillion&categorycode=24:
+# f:total 194, page 1 = 100 entries, page 2 = 94, page 3 = 0.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("page", "count", "partial"),
+    [(1, 100, True), (2, 94, False), (3, 0, False)],
+    ids=["first-page", "last-page", "past-the-end"],
+)
+async def test_is_partial_counts_earlier_pages(monkeypatch, mcp_client, page, count, partial):
+    _use_feed(monkeypatch, {"f:total": 194, "entry": [_entry(i) for i in range(count)]})
+
+    data = await _call(mcp_client, page=page, max_notices=100)
+
+    assert data["upstream_total"] == 194
+    assert data["is_partial"] is partial
+    assert len(data["notices"]) == count
+
+
+@pytest.mark.asyncio
+async def test_middle_page_is_partial(monkeypatch, mcp_client):
+    # 200 read after page 2 of 350: more remain.
+    _use_feed(monkeypatch, {"f:total": 350, "entry": [_entry(i) for i in range(100)]})
+
+    data = await _call(mcp_client, page=2)
+
+    assert data["is_partial"] is True
