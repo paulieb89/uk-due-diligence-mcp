@@ -2,6 +2,13 @@
 
 All notable changes to `uk-due-diligence-mcp` are documented here, starting with 1.7.0. Earlier releases are described in their GitHub release notes.
 
+## [Unreleased]
+
+### Changed
+
+- Every upstream request (Companies House, Charity Commission, The Gazette, HMLR, sanctions list downloads) sends one identifying User-Agent, `uk-due-diligence-mcp/<version>` with the project URL and maintainer contact, as the Gazette's fair-use policy asks (#86).
+- FastMCP 4.1.3 → 4.1.8 (#49).
+
 ## [1.8.0] — 2026-11-21
 
 ### Added
