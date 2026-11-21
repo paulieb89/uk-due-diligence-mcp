@@ -86,10 +86,9 @@ def _isolate(monkeypatch):
     monkeypatch.setattr(http_client, "_gazette_blocked_until", 0.0)
     # Cold sanctions cache, so the forced failure reaches the list downloads.
     monkeypatch.setattr(sanctions, "_INDEX", None)
-    monkeypatch.setattr(sanctions, "_AS_AT", None)
-    monkeypatch.setattr(sanctions, "_LOADED_MONO", None)
-    monkeypatch.setattr(sanctions, "_LISTS_OK", [])
-    monkeypatch.setattr(sanctions, "_FAILED_MONO", None)
+    monkeypatch.setattr(sanctions, "_LIST_AS_AT", {})
+    monkeypatch.setattr(sanctions, "_LIST_LOADED_MONO", {})
+    monkeypatch.setattr(sanctions, "_LIST_FAILED_MONO", {})
 
 
 @pytest_asyncio.fixture

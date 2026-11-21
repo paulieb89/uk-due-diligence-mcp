@@ -43,12 +43,9 @@ def reset_index(monkeypatch):
     a leaked bound lock fails other files that import `server`.
     """
     monkeypatch.setattr(sanctions, "_INDEX", None)
-    monkeypatch.setattr(sanctions, "_AS_AT", None)
-    monkeypatch.setattr(sanctions, "_LOADED_MONO", None)
-    monkeypatch.setattr(sanctions, "_LISTS_OK", [])
-    # raising=False so this fixture also runs against a tree without the cooldown,
-    # letting these tests fail on their assertions rather than erroring in setup.
-    monkeypatch.setattr(sanctions, "_FAILED_MONO", None, raising=False)
+    monkeypatch.setattr(sanctions, "_LIST_AS_AT", {})
+    monkeypatch.setattr(sanctions, "_LIST_LOADED_MONO", {})
+    monkeypatch.setattr(sanctions, "_LIST_FAILED_MONO", {})
     monkeypatch.setattr(sanctions, "_LOCK", asyncio.Lock())
 
 
@@ -78,8 +75,8 @@ def _yields_nothing(_path):
 
 def _use_sources(monkeypatch, *sources):
     monkeypatch.setattr(sanctions, "_SOURCES", list(sources))
-    # raising=False for the same reason as _FAILED_MONO above: these tests must be
-    # able to run, and fail on their assertions, against a tree without the fix.
+    # raising=False so these tests can run, and fail on their assertions, against a
+    # tree without _EXPECTED_LISTS.
     monkeypatch.setattr(
         sanctions, "_EXPECTED_LISTS", [label for label, _, _ in sources], raising=False
     )
@@ -118,8 +115,8 @@ async def test_total_failure_on_cold_start_raises_instead_of_caching_empty(monke
     assert payload.error_category == "transient"
     assert payload.is_retryable is True
     assert sanctions._INDEX is None
-    assert sanctions._AS_AT is None
-    assert sanctions._LOADED_MONO is None
+    assert sanctions._LIST_AS_AT == {}
+    assert sanctions._LIST_LOADED_MONO == {}
 
 
 @pytest.mark.asyncio
@@ -139,12 +136,13 @@ async def test_index_recovers_once_upstream_returns(monkeypatch):
         await sanctions.get_index()
 
     failing[0] = False
-    monkeypatch.setattr(sanctions, "_FAILED_MONO", None, raising=False)  # past the cooldown
+    sanctions._LIST_FAILED_MONO.clear()  # past the cooldown
 
-    index, as_at, lists_ok = await sanctions.get_index()
-    assert lists_ok == ["OFSI (UK)"]
-    assert index[sanctions.normalize("ACME TRADING LTD")]
-    assert as_at is not None
+    snap = await sanctions.get_index()
+    assert snap.lists_screened == ["OFSI (UK)"]
+    assert snap.lists_stale == []
+    assert snap.index[sanctions.normalize("ACME TRADING LTD")]
+    assert snap.as_at is not None
 
 
 @pytest.mark.asyncio
@@ -156,16 +154,18 @@ async def test_total_failure_with_warm_index_keeps_serving_stale(monkeypatch):
     """
     _use_sources(monkeypatch, ("OFSI (UK)", "u1", _yields("OFSI (UK)")))
     monkeypatch.setattr(sanctions, "_download_to_temp", _download_ok)
-    _, first_as_at, _ = await sanctions.get_index()
+    first_as_at = (await sanctions.get_index()).as_at
 
     # Expire the TTL, then take the lists away.
-    monkeypatch.setattr(sanctions, "_LOADED_MONO", time.monotonic() - sanctions.TTL_SECONDS - 1)
+    sanctions._LIST_LOADED_MONO["OFSI (UK)"] = time.monotonic() - sanctions.TTL_SECONDS - 1
     _download_raising(monkeypatch)
 
-    index, as_at, lists_ok = await sanctions.get_index()
-    assert lists_ok == ["OFSI (UK)"]
-    assert as_at == first_as_at, "stale serve must not restamp as_at"
-    assert index[sanctions.normalize("ACME TRADING LTD")]
+    snap = await sanctions.get_index()
+    assert snap.lists_screened == ["OFSI (UK)"]
+    assert snap.lists_stale == ["OFSI (UK)"]
+    assert snap.is_partial is True
+    assert snap.as_at == first_as_at, "stale serve must not restamp as_at"
+    assert snap.index[sanctions.normalize("ACME TRADING LTD")]
 
 
 @pytest.mark.asyncio
@@ -301,7 +301,7 @@ async def test_underscore_only_record_is_not_indexed(monkeypatch):
     )
     monkeypatch.setattr(sanctions, "_download_to_temp", _download_ok)
 
-    index, ok = await sanctions._build_index()
+    index, ok, _ = await sanctions._build_index()
 
     assert ok == ["OFAC (US)"]
     assert "" not in index

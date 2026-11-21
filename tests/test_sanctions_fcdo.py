@@ -65,10 +65,9 @@ def fixture_sized_guards(monkeypatch):
 @pytest.fixture(autouse=True)
 def reset_index(monkeypatch):
     monkeypatch.setattr(sanctions, "_INDEX", None)
-    monkeypatch.setattr(sanctions, "_AS_AT", None)
-    monkeypatch.setattr(sanctions, "_LOADED_MONO", None)
-    monkeypatch.setattr(sanctions, "_LISTS_OK", [])
-    monkeypatch.setattr(sanctions, "_FAILED_MONO", None)
+    monkeypatch.setattr(sanctions, "_LIST_AS_AT", {})
+    monkeypatch.setattr(sanctions, "_LIST_LOADED_MONO", {})
+    monkeypatch.setattr(sanctions, "_LIST_FAILED_MONO", {})
     monkeypatch.setattr(sanctions, "_LOCK", asyncio.Lock())
 
 
@@ -228,7 +227,7 @@ def test_guard_rejection_makes_the_uk_list_unavailable_not_partially_indexed(mon
 
     monkeypatch.setattr(sanctions, "_download_to_temp", download_half)
 
-    index, ok = asyncio.run(sanctions._build_index())
+    index, ok, _ = asyncio.run(sanctions._build_index())
 
     assert ok == []
     assert not any(r.source == "OFSI (UK)" for recs in index.values() for r in recs)
@@ -257,7 +256,7 @@ async def test_failed_list_contributes_no_partial_records(monkeypatch):
     )
     monkeypatch.setattr(sanctions, "_download_to_temp", _download_ok)
 
-    index, ok = await sanctions._build_index()
+    index, ok, _ = await sanctions._build_index()
 
     assert ok == ["OFSI (UK)"]
     assert all(r.source != "OFAC (US)" for recs in index.values() for r in recs)
@@ -270,9 +269,9 @@ async def test_failed_refresh_serves_last_index_flagged_partial_with_old_as_at(m
     _use_fixture_source(monkeypatch)
     monkeypatch.setattr(sanctions, "_download_to_temp", _download_ok)
     await sanctions.get_index()
-    first_as_at = sanctions._AS_AT
+    first_as_at = sanctions._LIST_AS_AT["OFSI (UK)"]
 
-    monkeypatch.setattr(sanctions, "_LOADED_MONO", time.monotonic() - sanctions.TTL_SECONDS - 1)
+    sanctions._LIST_LOADED_MONO["OFSI (UK)"] = time.monotonic() - sanctions.TTL_SECONDS - 1
 
     async def download_fails(_url):
         raise RuntimeError("upstream unreachable")
@@ -284,6 +283,8 @@ async def test_failed_refresh_serves_last_index_flagged_partial_with_old_as_at(m
 
     assert data["match_count"] == 1
     assert data["as_at"] == first_as_at
+    assert data["list_as_at"] == {"OFSI (UK)": first_as_at}
+    assert data["lists_stale"] == ["OFSI (UK)"]
     assert data["is_partial"] is True
 
 
@@ -300,15 +301,19 @@ async def test_truncated_uk_xml_is_not_reported_as_screened(monkeypatch, tmp_pat
     monkeypatch.setattr(sanctions, "_SOURCES", [("OFSI (UK)", "u1", sanctions._parse_fcdo)])
     monkeypatch.setattr(sanctions, "_download_to_temp", download_cut)
 
-    index, ok = await sanctions._build_index()
+    index, ok, _ = await sanctions._build_index()
 
     assert ok == []
     assert not any(r.source == "OFSI (UK)" for recs in index.values() for r in recs)
 
 
 @pytest.mark.asyncio
-async def test_partial_refresh_reports_the_failed_uk_list_unavailable(monkeypatch, mcp_client):
-    """After a good load, a refresh where only the UK list fails must not screen it as loaded."""
+async def test_partial_refresh_keeps_the_failed_uk_list_stale(monkeypatch, mcp_client):
+    """After a good load, a refresh where only the UK list fails keeps its last verified load.
+
+    The previous UK records still screen, flagged in lists_stale with their own older
+    load time (#26); none of the failed refresh's records reach the index.
+    """
     uk_fails = [False]
 
     def uk_parser(_path):
@@ -327,15 +332,21 @@ async def test_partial_refresh_reports_the_failed_uk_list_unavailable(monkeypatc
     await sanctions.get_index()
 
     uk_fails[0] = True
-    monkeypatch.setattr(sanctions, "_LOADED_MONO", time.monotonic() - sanctions.TTL_SECONDS - 1)
+    uk_as_at = sanctions._LIST_AS_AT["OFSI (UK)"]
+    expired = time.monotonic() - sanctions.TTL_SECONDS - 1
+    for label in ("OFAC (US)", "OFSI (UK)"):
+        sanctions._LIST_LOADED_MONO[label] = expired
 
     result = await mcp_client.call_tool("sanctions_screen", {"name": "IVAN EXAMPLE"})
     data = result.structured_content
 
-    assert data["lists_screened"] == ["OFAC (US)"]
-    assert data["lists_unavailable"] == ["OFSI (UK)"]
+    assert data["lists_screened"] == ["OFAC (US)", "OFSI (UK)"]
+    assert data["lists_unavailable"] == []
+    assert data["lists_stale"] == ["OFSI (UK)"]
+    assert data["list_as_at"]["OFSI (UK)"] == uk_as_at
+    assert data["as_at"] == uk_as_at
     assert data["is_partial"] is True
-    assert {h["list_source"] for h in data["hits"]} == {"OFAC (US)"}
+    assert {h["list_source"] for h in data["hits"]} == {"OFAC (US)", "OFSI (UK)"}
 
 
 @pytest.mark.skipif(not REAL_XML, reason="set FCDO_UK_SANCTIONS_XML to a downloaded copy of the FCDO XML")

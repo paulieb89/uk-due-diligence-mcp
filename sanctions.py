@@ -32,7 +32,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from collections import namedtuple
 from datetime import datetime, timezone
-from typing import Annotated, Iterator, Literal
+from typing import Annotated, Iterable, Iterator, Literal, NamedTuple
 
 from pydantic import Field
 from fastmcp import FastMCP
@@ -52,11 +52,16 @@ from models import SanctionsHit, SanctionsScreenResult
 # ---------------------------------------------------------------------------
 
 TTL_SECONDS = 24 * 60 * 60  # lists update on designation; a daily refresh is ample
-# After a load that produced nothing there is no index to serve, so every call
-# would otherwise re-download all four bulk lists inside _LOCK. _download_to_temp
-# does not go through _request_with_retry and sanctions_client's read timeout is
-# 120s, so an unbounded retry costs ~8 minutes per caller during an outage.
+# Per list: after a refresh of a list fails, that list is not retried until this has
+# passed; the current index (with the list's previous records, if any, marked stale)
+# is served meanwhile. Without it every call during an outage would re-download the
+# failed bulk lists inside _LOCK. _download_to_temp does not go through
+# _request_with_retry and sanctions_client's read timeout is 120s, so an unbounded
+# retry costs ~8 minutes per caller during an outage.
 FAILURE_COOLDOWN_SECONDS = 5 * 60
+# A list whose last successful load is older than this is dropped from the index and
+# reported unavailable, rather than served stale indefinitely.
+MAX_STALE_SECONDS = 7 * 24 * 60 * 60
 VALID_ENTITY_TYPES = {"person", "entity"}
 
 # A single index entry. Tuples (not dicts/models) keep the index compact on a 256 MB VM.
@@ -68,11 +73,18 @@ Record = namedtuple(
 # Module-level cache (single-instance deployment -> one in-process index)
 # ---------------------------------------------------------------------------
 
+# The published index. None until some list has loaded at least once; afterwards a
+# dict (possibly empty, if every list has since expired). Never mutated once published:
+# a refresh or expiry builds a new dict and swaps it in, so a caller mid-screen keeps a
+# consistent view.
 _INDEX: dict[str, list[Record]] | None = None
-_AS_AT: str | None = None
-_LOADED_MONO: float | None = None
-_LISTS_OK: list[str] = []
-_FAILED_MONO: float | None = None  # when a build last produced zero lists
+# Per list, keyed by label. A label is present in _LIST_LOADED_MONO / _LIST_AS_AT only
+# while its records are in _INDEX (last successful load, at most MAX_STALE_SECONDS old).
+_LIST_AS_AT: dict[str, str] = {}  # ISO 8601 UTC time of the last successful load
+_LIST_LOADED_MONO: dict[str, float] = {}  # monotonic time of the last successful load
+# Monotonic time of the last failed refresh of each list. Cleared on success, so a
+# label present here means the most recent attempt at that list failed.
+_LIST_FAILED_MONO: dict[str, float] = {}
 _LOCK = asyncio.Lock()
 # Strong references to in-flight warm tasks: the event loop only holds weak
 # references, so an unreferenced task can be garbage-collected mid-flight.
@@ -81,6 +93,16 @@ _WARM_TASKS: set[asyncio.Task[None]] = set()
 
 def _log(msg: str) -> None:
     print(f"[uk_due_diligence_mcp.sanctions] {msg}", file=sys.stderr)
+
+
+# Clock seams, so tests can drive freshness without patching the time module that
+# the event loop itself uses.
+def _clock() -> float:
+    return time.monotonic()
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -347,21 +369,59 @@ _EXPECTED_LISTS = [label for label, _, _ in _SOURCES]
 # Index build + lazy/TTL cache
 # ---------------------------------------------------------------------------
 
-def _drop_source(index: dict[str, list[Record]], label: str) -> None:
-    for key in list(index):
-        kept = [r for r in index[key] if r.source != label]
-        if kept:
-            index[key] = kept
+def _source_order(rec: Record) -> int:
+    try:
+        return _EXPECTED_LISTS.index(rec.source)
+    except ValueError:
+        return len(_EXPECTED_LISTS)
+
+
+def _merge(
+    old: dict[str, list[Record]],
+    new: dict[str, list[Record]],
+    replace: set[str],
+) -> dict[str, list[Record]]:
+    """A new index: `old` without any record from `replace`, plus every record in `new`.
+
+    Neither input is mutated, so a caller still screening against `old` is unaffected.
+    Record objects (and untouched per-key lists) are reused, not copied.
+    """
+    merged: dict[str, list[Record]] = {}
+    for key, recs in old.items():
+        if replace and any(r.source in replace for r in recs):
+            kept = [r for r in recs if r.source not in replace]
+            if kept:
+                merged[key] = kept
         else:
-            del index[key]
+            merged[key] = recs
+    for key, recs in new.items():
+        if key in merged:
+            # Keep hits in list order regardless of which list refreshed last.
+            merged[key] = sorted(merged[key] + recs, key=_source_order)
+        else:
+            merged[key] = list(recs)
+    return merged
 
 
-async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
-    """Fetch + parse every list into a normalised-name index. Best-effort per list."""
+async def _build_index(
+    labels: Iterable[str] | None = None,
+) -> tuple[dict[str, list[Record]], list[str], dict[str, tuple[str, float]]]:
+    """Fetch + parse the given lists (default: all) into a normalised-name index.
+
+    Best-effort per list. Each list is staged on its own and only reaches the returned
+    index once its parser has completed and produced records, so a list that fails
+    part-way contributes nothing. Returns (index, loaded labels, label -> (ISO UTC,
+    monotonic) time its parse completed).
+    """
+    wanted = None if labels is None else set(labels)
     index: dict[str, list[Record]] = {}
     ok: list[str] = []
+    loaded_at: dict[str, tuple[str, float]] = {}
     for label, url, parser in _SOURCES:
+        if wanted is not None and label not in wanted:
+            continue
         path = None
+        staged: dict[str, list[Record]] = {}
         try:
             path = await _download_to_temp(url)
             count = 0
@@ -369,7 +429,7 @@ async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
                 key = normalize(rec.matched_name)
                 if not key:
                     continue
-                index.setdefault(key, []).append(rec)
+                staged.setdefault(key, []).append(rec)
                 count += 1
             if count == 0:
                 # A national sanctions list is never legitimately empty: a zero
@@ -377,32 +437,58 @@ async def _build_index() -> tuple[dict[str, list[Record]], list[str]]:
                 # is designated. Withhold the label rather than claim a screen.
                 _log(f"REJECTED {label}: parsed 0 name entries")
                 continue
+            for key, recs in staged.items():
+                index.setdefault(key, []).extend(recs)
             ok.append(label)
+            loaded_at[label] = (_utc_now().isoformat(), _clock())
             _log(f"loaded {label}: {count} name entries")
         except Exception as exc:  # one bad list must not sink the others
+            # Records staged before the failure are discarded with `staged`.
             _log(f"FAILED to load {label}: {type(exc).__name__}: {exc}")
-            # Records parsed before the failure must not screen as if the list loaded.
-            _drop_source(index, label)
         finally:
             if path and os.path.exists(path):
                 try:
                     os.unlink(path)
                 except OSError:
                     pass
-    return index, ok
+    return index, ok, loaded_at
 
 
-def _fresh(now: float) -> bool:
-    return _INDEX is not None and _LOADED_MONO is not None and (now - _LOADED_MONO) < TTL_SECONDS
+def _fresh(label: str, now: float) -> bool:
+    """True while `label`'s last successful load is younger than the TTL."""
+    loaded = _LIST_LOADED_MONO.get(label)
+    return loaded is not None and (now - loaded) < TTL_SECONDS
 
 
-def _cooling_down(now: float) -> bool:
-    """True while a recent build produced zero lists and there is nothing to serve."""
-    return (
-        _INDEX is None
-        and _FAILED_MONO is not None
-        and (now - _FAILED_MONO) < FAILURE_COOLDOWN_SECONDS
-    )
+def _cooling_down(label: str, now: float) -> bool:
+    """True while a recent refresh of `label` failed and it should not be retried yet."""
+    failed = _LIST_FAILED_MONO.get(label)
+    return failed is not None and (now - failed) < FAILURE_COOLDOWN_SECONDS
+
+
+def _due(now: float) -> list[str]:
+    """Lists to attempt now: missing or past the TTL, and not cooling down."""
+    return [
+        label for label in _EXPECTED_LISTS
+        if not _fresh(label, now) and not _cooling_down(label, now)
+    ]
+
+
+def _expire(now: float) -> None:
+    """Drop every list whose last successful load is older than MAX_STALE_SECONDS."""
+    global _INDEX
+    expired = {
+        label for label, loaded in _LIST_LOADED_MONO.items()
+        if (now - loaded) > MAX_STALE_SECONDS
+    }
+    if not expired:
+        return
+    for label in expired:
+        _LIST_LOADED_MONO.pop(label, None)
+        _LIST_AS_AT.pop(label, None)
+    if _INDEX is not None:
+        _INDEX = _merge(_INDEX, {}, expired)
+    _log(f"dropped lists older than {MAX_STALE_SECONDS}s: {sorted(expired)}")
 
 
 def _raise_no_index() -> None:
@@ -418,42 +504,83 @@ def _raise_no_index() -> None:
     )
 
 
-async def get_index() -> tuple[dict[str, list[Record]], str | None, list[str]]:
-    """Return the cached index, rebuilding if empty or older than the TTL.
+class IndexSnapshot(NamedTuple):
+    """One coherent view of the index and its per-list provenance."""
 
-    Raises rather than returning an empty index: caching a load that produced
-    nothing would serve a clean screen for the whole TTL, outliving the outage
-    that caused it.
-    """
-    global _INDEX, _AS_AT, _LOADED_MONO, _LISTS_OK, _FAILED_MONO
-    now = time.monotonic()
-    if _fresh(now):
-        return _INDEX, _AS_AT, _LISTS_OK
-    if _cooling_down(now):
+    index: dict[str, list[Record]]
+    lists_screened: list[str]
+    lists_unavailable: list[str]
+    lists_stale: list[str]
+    list_as_at: dict[str, str]
+    as_at: str | None
+    is_partial: bool
+
+
+def _snapshot(now: float) -> IndexSnapshot:
+    """Capture the published state. Synchronous, so it cannot interleave with a publish."""
+    if _INDEX is None:
+        # No list has ever loaded: nothing to serve, and an empty screen is not clean.
         _raise_no_index()
+    screened = [label for label in _EXPECTED_LISTS if label in _LIST_LOADED_MONO]
+    unavailable = [label for label in _EXPECTED_LISTS if label not in _LIST_LOADED_MONO]
+    stale = [label for label in screened if label in _LIST_FAILED_MONO]
+    list_as_at = {label: _LIST_AS_AT[label] for label in screened}
+    # The oldest *reported* UTC time, not the earliest monotonic load: the wall clock
+    # can step between loads, and as_at must never look fresher than any list_as_at.
+    as_at = min(list_as_at.values(), key=datetime.fromisoformat, default=None)
+    past_ttl = any(not _fresh(label, now) for label in screened)
+    return IndexSnapshot(
+        index=_INDEX,
+        lists_screened=screened,
+        lists_unavailable=unavailable,
+        lists_stale=stale,
+        list_as_at=list_as_at,
+        as_at=as_at,
+        is_partial=bool(unavailable or stale or past_ttl),
+    )
+
+
+async def get_index() -> IndexSnapshot:
+    """Return a snapshot of the index, refreshing any list that is missing or past the TTL.
+
+    Freshness is per list. A refresh replaces only the lists that loaded; a list that
+    fails keeps its previous records (reported stale) until they are older than
+    MAX_STALE_SECONDS, and is not retried until FAILURE_COOLDOWN_SECONDS has passed.
+    Lists that are fresh are never re-downloaded because another list failed.
+
+    Raises rather than returning an empty index when no list has ever loaded: caching
+    a load that produced nothing would serve a clean screen, outliving the outage that
+    caused it.
+    """
+    global _INDEX
+    now = _clock()
+    _expire(now)
+    if not _due(now):
+        return _snapshot(now)
     async with _LOCK:
-        now = time.monotonic()
-        if _fresh(now):
-            return _INDEX, _AS_AT, _LISTS_OK
-        if _cooling_down(now):
-            _raise_no_index()
-        index, ok = await _build_index()
-        if not ok:
-            _FAILED_MONO = time.monotonic()
-            if _INDEX is not None:
-                # Every list failed this refresh — keep serving the previous (stale) index.
-                _log("refresh loaded 0 lists; retaining previous index")
-                return _INDEX, _AS_AT, _LISTS_OK
-            # Nothing to fall back on. Do not cache {} and do not stamp _AS_AT:
-            # a screen that loaded no list is unresolved, not clean.
-            _log("build loaded 0 lists and no previous index exists; refusing to serve")
-            _raise_no_index()
-        _INDEX = index
-        _LISTS_OK = ok
-        _AS_AT = datetime.now(timezone.utc).isoformat()
-        _LOADED_MONO = time.monotonic()
-        _FAILED_MONO = None
-        return _INDEX, _AS_AT, _LISTS_OK
+        # Another caller may have refreshed while this one waited for the lock.
+        now = _clock()
+        _expire(now)
+        due = _due(now)
+        if due:
+            index, ok, loaded_at = await _build_index(due)
+            now = _clock()
+            failed = [label for label in due if label not in ok]
+            for label in failed:
+                _LIST_FAILED_MONO[label] = now
+                if label in _LIST_LOADED_MONO:
+                    _log(f"refresh of {label} failed; serving its previous load (stale)")
+            if ok:
+                for label in ok:
+                    _LIST_FAILED_MONO.pop(label, None)
+                    _LIST_AS_AT[label], _LIST_LOADED_MONO[label] = loaded_at[label]
+                _INDEX = _merge(_INDEX or {}, index, set(ok))
+            elif _INDEX is None:
+                # Nothing to fall back on. Do not cache {} and do not stamp a load time:
+                # a screen that loaded no list is unresolved, not clean.
+                _log("build loaded 0 lists and no previous index exists; refusing to serve")
+            _expire(now)
+        return _snapshot(now)
 
 
 async def warm_cache() -> None:
@@ -542,27 +669,31 @@ def register_tools(mcp: FastMCP) -> None:
         hit on a common name may be a false positive to disambiguate. This is a
         screening aid, not a compliance determination.
 
-        `lists_screened` reports which of OFSI/OFAC/EU/UN were actually loaded;
-        `lists_unavailable` names those that were not, and `is_partial` is true
-        whenever it is non-empty or the lists are a previous load that could not
-        be refreshed (`as_at` then shows when they were loaded). When `is_partial`
-        is true an empty `hits` is UNRESOLVED, not clearance. If no list could be
-        loaded at all the call raises a retryable error rather than returning an
-        empty screen. `as_at` is when the lists were last refreshed on this server.
+        `lists_screened` reports which of OFSI/OFAC/EU/UN were screened;
+        `lists_unavailable` names those that were not. Each list is refreshed on
+        its own: if a list's latest refresh failed, its previous load is still
+        screened and the list is named in `lists_stale`, for up to 7 days after
+        its last successful load (after that it is dropped and reported
+        unavailable). `list_as_at` gives each screened list's own load time, and
+        `as_at` is the oldest of them. `is_partial` is true whenever a list is
+        unavailable or stale, or a screened list is 24 hours old or more. When
+        `is_partial` is true an empty `hits` is UNRESOLVED, not clearance. If no
+        list has ever loaded the call raises a retryable error rather than
+        returning an empty screen.
         """
-        index, as_at, lists_ok = await get_index()
+        snap = await get_index()
         etype = entity_type
-        hits = _screen(index, name, etype)
-        unavailable = [label for label in _EXPECTED_LISTS if label not in lists_ok]
-        stale = not _fresh(time.monotonic())
+        hits = _screen(snap.index, name, etype)
         return SanctionsScreenResult(
             query=name,
             normalized_query=normalize(name),
             entity_type_filter=etype,
             match_count=len(hits),
-            lists_screened=lists_ok,
-            lists_unavailable=unavailable,
-            is_partial=bool(unavailable) or stale,
-            as_at=as_at,
+            lists_screened=snap.lists_screened,
+            lists_unavailable=snap.lists_unavailable,
+            lists_stale=snap.lists_stale,
+            list_as_at=snap.list_as_at,
+            is_partial=snap.is_partial,
+            as_at=snap.as_at,
             hits=hits,
         )
