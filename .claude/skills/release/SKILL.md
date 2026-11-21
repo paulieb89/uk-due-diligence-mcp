@@ -24,11 +24,12 @@ a paraphrase here. A hand-run `fly deploy` is refused by
   `gh pr ready <n>` before it reaches the merge gate.
 - **One repo at a time.** Release, verify prod, then start the next repo. If
   any prod check fails, stop, give the rollback, and do not release the next.
-- **Staging from `main` before tagging.** After the prep PR merges, staging
-  redeploys from `main`: `/health` `git_sha` must be the merge commit and
-  `tests/live/validation_audit_calls.py` must pass.
+- **Staging at the tag before the gate.** The tag is on the prep PR's merge
+  commit; staging `/health` `git_sha` must be that commit and
+  `tests/live/validation_audit_calls.py` must pass (step 8). Merges to `main`
+  are not frozen during a release.
 - **State the rollback before asking for the gate** (see Rollback below).
-- **Verify prod and the proxy after** (step 9).
+- **Verify prod and the proxy after** (step 10).
 - CHANGELOG names breaking changes tersely under `### Breaking`; check every
   line against the code, including text the user supplies.
 
@@ -46,14 +47,23 @@ a paraphrase here. A hand-run `fly deploy` is refused by
 5. Rename `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] — YYYY-MM-DD` (add any missing items), and start a fresh empty `## [Unreleased]` only when the next change lands.
 6. Open the PR, wait for `Non-live tests` to pass, then merge it with a merge
    commit (`gh pr merge --merge`, this repo's convention; precedent: #42).
-7. Watch `deploy-staging.yml` for the merge commit, then check staging
-   `/health` (version and `git_sha` == merge commit) and run
-   `uv run --no-sync python tests/live/validation_audit_calls.py`.
-8. Tag the merge commit `vX.Y.Z` and push the tag separately. State the
-   rollback, then ask for the gate. On approval,
+7. Tag the merge commit `vX.Y.Z` (`git tag vX.Y.Z <merge sha>`, not `HEAD`)
+   and push the tag separately; a tag push triggers no workflow. The tag pins
+   the release, so merges to `main` can continue throughout — no merge freeze.
+8. Check staging at the tag: `/health` version and `git_sha` == the tag's
+   commit, then `uv run --no-sync python tests/live/validation_audit_calls.py`.
+   If `main` has moved on, staging runs the newer commit (or cancelled the
+   tag's deploy); deploy the tag itself with
+   `gh workflow run deploy-staging.yml --ref vX.Y.Z -f ref=vX.Y.Z` — dispatched
+   from the tag, it has its own concurrency group, so later pushes to `main`
+   don't cancel it. The next merge to `main` redeploys staging over it; that's
+   fine once the check has passed.
+9. State the rollback, then ask for the gate. On approval,
    `gh release create vX.Y.Z --verify-tag` with the CHANGELOG entry as notes;
-   watch `release.yml` with `gh run watch --exit-status`.
-9. Verify what actually shipped:
+   watch `release.yml` with `gh run watch --exit-status`. Open Foreman drafts
+   whose `CHANGELOG.md` hunk predates the release must land under
+   `## [Unreleased]`, not `## [X.Y.Z]` — check it when reviewing them.
+10. Verify what actually shipped:
    - prod `/health` shows the version and the tag's SHA;
    - `scripts/check-deploy-drift.sh`;
    - `tests/live/validation_audit_calls.py --url https://uk-due-diligence-mcp.fly.dev/mcp`;

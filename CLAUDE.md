@@ -46,7 +46,7 @@ Then `uv lock`, and rename `## [Unreleased]` in `CHANGELOG.md` to a `## [X.Y.Z] 
 metadata, and a stale `.venv` fails `test_server_version_is_the_project_version`.
 
 Release gates — one approval gate at `gh release create`, one repo at a time,
-rollback stated before the gate, staging re-verified from `main` before tagging,
+rollback stated before the gate, staging verified at the release tag (no merge freeze),
 prod and proxy checks after — and the step-by-step procedure live in the
 `/release` skill (`.claude/skills/release/SKILL.md`).
 
