@@ -466,3 +466,91 @@ def test_stalled_metrics_sink_never_holds_up_the_decision(
     assert bad.stdout == good.stdout
     assert bad.stderr == ""
     assert json.loads(bad.stdout)["hookSpecificOutput"]["permissionDecision"] in {"deny", "ask"}
+
+
+# Runs the real hook as __main__ with one filesystem call in the real append
+# path replaced by an effectively endless sleep — the shape of a write or mkdir
+# on a hung network mount. Only the metrics path is stalled; stdout and stderr
+# (fds 1 and 2, written through sys.stdout/sys.stderr) are untouched.
+_STALL_RUNNER = """
+import os, runpy, sys, time
+hook, point = sys.argv[1], sys.argv[2]
+real_write, real_mkdir = os.write, os.mkdir
+
+def stalled_write(fd, data):
+    if fd > 2:
+        time.sleep(3600)
+    return real_write(fd, data)
+
+def stalled_mkdir(path, *args, **kwargs):
+    if ".claude" in os.fspath(path):
+        time.sleep(3600)
+    return real_mkdir(path, *args, **kwargs)
+
+if point == "write":
+    os.write = stalled_write
+else:
+    os.mkdir = stalled_mkdir
+sys.argv = [hook]
+sys.path.insert(0, os.path.dirname(hook))
+runpy.run_path(hook, run_name="__main__")
+"""
+
+
+@pytest.mark.parametrize("stall_point", ["write", "mkdir"])
+@pytest.mark.parametrize(
+    ("command", "ack_in_env"),
+    [("fly deploy", False), ("FLY_DEPLOY_ACK=1 fly deploy", False), ("fly deploy", True)],
+    ids=["deny", "ask-prefix", "ask-env"],
+)
+def test_stalled_regular_file_append_never_holds_up_the_decision(
+    tmp_path_factory, monkeypatch, project_dir, command, ack_in_env, stall_point
+):
+    """A hung regular-file append must not hold the decision past the hook timeout.
+
+    O_NONBLOCK only bounds a FIFO open. A write (or mkdir) that hangs on a
+    regular file would otherwise keep the hook running until the runtime kills
+    it and discards its output (HOOKS-REF.md § Timeouts) — and on PreToolUse a
+    timed-out command hook lets the deploy proceed. The hook must exit 0
+    promptly with exactly the JSON of a run whose logging succeeded.
+    """
+    import time
+
+    good_root = tmp_path_factory.mktemp("good")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(good_root))
+    good = _run(_payload(command), ack_in_env=ack_in_env)
+    assert len(_records(good_root)) == 1
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+
+    if stall_point == "write":
+        # Directory and regular file already present, so the stall is in the
+        # write to a regular file, past the open and fstat checks.
+        for p in _metrics_paths(project_dir):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+
+    env = dict(os.environ)
+    env.pop("FLY_DEPLOY_ACK", None)
+    if ack_in_env:
+        env["FLY_DEPLOY_ACK"] = "1"
+    started = time.monotonic()
+    try:
+        bad = subprocess.run(
+            [sys.executable, "-c", _STALL_RUNNER, str(_HOOK), stall_point],
+            input=json.dumps(_payload(command)),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"hook blocked on a stalled metrics {stall_point} instead of deciding")
+    elapsed = time.monotonic() - started
+
+    assert bad.returncode == good.returncode == 0
+    assert bad.stdout == good.stdout
+    assert bad.stderr == ""
+    assert json.loads(bad.stdout)["hookSpecificOutput"]["permissionDecision"] in {"deny", "ask"}
+    assert elapsed < 10, f"decision took {elapsed:.1f}s"
+    # The stalled attempt left no record behind, truncated or otherwise.
+    assert _records(project_dir) == []

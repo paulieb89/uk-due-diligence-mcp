@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Append one JSONL line per hook event. Never blocks, never fails loudly."""
+"""Append one JSONL line per hook event. Never fails loudly.
+
+It does not hang on a reader-less FIFO, but mkdir and the write itself can still
+stall on a hung filesystem; callers that must answer in time (pre_bash_deploy.py)
+bound the wait themselves.
+"""
 import json
 import os
 import stat
@@ -11,8 +16,9 @@ from pathlib import Path
 def append_event(data: dict) -> None:
     """Append one record for `data` to today's metrics file. May raise.
 
-    Callers decide their own failure posture: main() swallows everything, and
-    pre_bash_deploy.py wraps this so a logging failure never changes a decision.
+    Callers decide their own failure posture: run as a script, the __main__
+    block swallows every exception; pre_bash_deploy.py runs this in a thread
+    with a bounded wait so neither a failure nor a stall changes its decision.
     """
     now = datetime.now(timezone.utc)
     rec = {"ts": now.isoformat(timespec="seconds"), **data}
@@ -29,8 +35,15 @@ def append_event(data: dict) -> None:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError(f"metrics destination is not a regular file: {out}")
-        line = json.dumps(rec, separators=(",", ":")) + "\n"
-        os.write(fd, line.encode("utf-8"))
+        line = (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8")
+        # One record, one write in the normal case, so O_APPEND keeps concurrent
+        # hooks' lines whole. os.write may still return short (signal, full
+        # disk); loop so the remainder lands rather than leaving a truncated line.
+        while line:
+            written = os.write(fd, line)
+            if written <= 0:
+                raise OSError(f"metrics write made no progress: {out}")
+            line = line[written:]
     finally:
         os.close(fd)
 
