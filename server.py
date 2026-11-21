@@ -253,5 +253,15 @@ def main() -> None:
     )
 
 
+def main_stdio() -> None:
+    """Run the MCP server over stdio, for PyPI install / local MCP clients.
+
+    No startup sanctions warm in this mode: the sanctions index lazy-loads on the
+    first sanctions_screen call. Stdout carries the protocol, so log to stderr only.
+    The FastMCP banner is off because it checks pypi.org for updates on every launch.
+    """
+    mcp.run(transport="stdio", show_banner=False)
+
+
 if __name__ == "__main__":
     main()

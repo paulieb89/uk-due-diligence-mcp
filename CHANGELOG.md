@@ -7,6 +7,7 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 ### Added
 
 - `sanctions_screen`: new `lists_stale` (lists screened from a previous load because their latest refresh failed) and `list_as_at` (each screened list's own load time) fields. `as_at` is now the oldest screened list's load time (#26).
+- `uvx uk-due-diligence-mcp` runs the server over stdio for local MCP clients: the console script now points at a new `server:main_stdio` entry point. The sanctions index loads on the first `sanctions_screen` call in this mode. The Docker image (`python server.py`) still serves streamable HTTP (#51).
 
 ### Changed
 

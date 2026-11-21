@@ -1,4 +1,4 @@
-"""Startup warm-up runs inside the real FastMCP 4 app lifespan.
+"""Startup warm-up runs inside the real FastMCP 4 app lifespan, and stdio mode starts.
 
 The sanctions warm-up is replaced with a recorder, so no network is used.
 """
@@ -7,13 +7,21 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
+import os
+import sys
+import tomllib
 import weakref
+from pathlib import Path
 
 import pytest
+from fastmcp import Client
+from fastmcp.client.transports import StdioTransport
 from fastmcp.server.http import create_streamable_http_app
 
 import sanctions
 import server
+from http_client import project_version
 from server import _run_at_startup
 
 
@@ -163,3 +171,89 @@ async def test_warm_cache_releases_the_task_after_cancellation(monkeypatch, warm
 
     assert task.cancelled()
     assert warm_tasks == set()
+
+
+# --- stdio entry point (#51) -------------------------------------------------
+# `uvx uk-due-diligence-mcp` runs the console script, which must speak stdio.
+# The server runs in a real subprocess. Parent monkeypatches do not reach the
+# child, so the child installs its own guard: any outbound connection or DNS
+# lookup is recorded to a file and refused, and so is any sanctions index load.
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_CHILD = """
+import json, os, socket
+
+_log = os.environ["UKDD_TEST_GUARD_LOG"]
+
+def _record(kind, detail):
+    with open(_log, "a") as fh:
+        fh.write(json.dumps({"kind": kind, "detail": repr(detail)}) + "\\n")
+
+def _refuse(kind):
+    def guard(*args, **kwargs):
+        _record(kind, args[1:] if kind == "connect" else args)
+        raise OSError("network disabled in test: " + kind)
+    return guard
+
+socket.socket.connect = _refuse("connect")
+socket.socket.connect_ex = _refuse("connect")
+socket.create_connection = _refuse("create_connection")
+socket.getaddrinfo = _refuse("getaddrinfo")
+
+import sanctions
+
+async def _no_index_load(*args, **kwargs):
+    _record("sanctions_get_index", args)
+    raise RuntimeError("sanctions index load in test")
+
+sanctions.get_index = _no_index_load
+
+import server
+server.main_stdio()
+"""
+
+
+def test_console_script_points_at_the_stdio_entry_point():
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    assert pyproject["project"]["scripts"]["uk-due-diligence-mcp"] == "server:main_stdio"
+
+
+@pytest.mark.asyncio
+async def test_main_stdio_serves_initialize_and_tools_list_offline(tmp_path):
+    guard_log = tmp_path / "guard.jsonl"
+    guard_log.touch()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"CH_API_KEY", "CHARITY_API_KEY", "PORT"}
+    }
+    env.update(
+        CH_API_KEY="dummy-ch-key",
+        CHARITY_API_KEY="dummy-charity-key",
+        UKDD_TEST_GUARD_LOG=str(guard_log),
+        PYTHONUNBUFFERED="1",
+    )
+    transport = StdioTransport(
+        command=sys.executable,
+        args=["-c", _CHILD],
+        env=env,
+        cwd=str(REPO_ROOT),
+        keep_alive=False,
+        log_file=tmp_path / "stderr.log",
+    )
+    client = Client(transport, mode="legacy", timeout=30, init_timeout=30)
+
+    # The client context closes the child on exit, including on failure.
+    async with asyncio.timeout(60):
+        async with client:
+            init = client.initialize_result
+            assert init is not None
+            assert init.server_info.name == "uk-due-diligence-mcp"
+            assert init.server_info.version == project_version()
+
+            names = {tool.name for tool in await client.list_tools()}
+
+    assert {"company_search", "sanctions_screen"} <= names
+    attempts = [json.loads(line) for line in guard_log.read_text().splitlines()]
+    assert attempts == []
