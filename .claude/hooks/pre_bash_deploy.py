@@ -39,11 +39,18 @@ import os
 import re
 import shlex
 import sys
+import threading
 
 ACK_VAR = "FLY_DEPLOY_ACK"
 DEPLOYERS = {"fly", "flyctl"}
 OPERATORS = {"&&", "||", ";", "|", "&", "\n", "(", ")"}
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
+
+# Upper bound on how long the decision waits for its metrics record. The hook
+# entries in settings.json set no `timeout`, so the runtime default applies (600 s
+# for a command hook, HOOKS-REF.md § Common fields); a healthy append takes
+# milliseconds. Past this, the decision is emitted and the record abandoned.
+LOG_WAIT_SECONDS = 1.5
 
 # Fallback only, for a command shlex cannot tokenise. Unanchored and so prone to
 # matching prose — which is the old defect — but an unparseable command naming a
@@ -158,15 +165,55 @@ def main() -> int:
     acked = acked_in_command or _acknowledged(os.environ.get(ACK_VAR))
     decision, reason = ("ask", ASK_REASON) if acked else ("deny", DENY_REASON)
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-        }
-    }))
+    output = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": reason,
+    }
+
+    # Logged here because nothing else will: PermissionDenied fires only in auto
+    # mode and not when a PreToolUse hook blocks a call. Measured 2026-09-09: a
+    # refused deploy reached the debug log and left no record in
+    # .claude/metrics/. Best-effort — a logging failure must never change the
+    # decision printed below, and neither may a logging *stall*: a hook that
+    # outlives its timeout has its output discarded and the deploy proceeds
+    # (HOOKS-REF.md § Timeouts). append_event's non-blocking open covers a
+    # reader-less FIFO, but not mkdir or a write on a hung mount, so the attempt
+    # runs in a daemon thread with a bounded wait. If it is still stuck, the
+    # decision goes out anyway and the __main__ block exits with os._exit so the
+    # stuck thread cannot hold interpreter shutdown.
+    _log_bounded({**data, "hookSpecificOutput": output})
+
+    print(json.dumps({"hookSpecificOutput": output}))
     return 0
 
 
+def _log_bounded(record: dict) -> None:
+    """Try to append `record`, waiting at most LOG_WAIT_SECONDS. Never raises."""
+
+    def attempt() -> None:
+        try:
+            # Imported lazily so even a broken log_event.py cannot stop this hook
+            # from loading or deciding.
+            from log_event import append_event
+
+            append_event(record)
+        except Exception:
+            pass
+
+    try:
+        worker = threading.Thread(target=attempt, name="deploy-guard-log", daemon=True)
+        worker.start()
+        worker.join(LOG_WAIT_SECONDS)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    status = main()
+    # Flush explicitly, then os._exit: a logging thread stuck in a kernel call
+    # (see _log_bounded) must not delay exit, and os._exit skips the buffered
+    # flush that a normal exit would do.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(status)

@@ -6,12 +6,18 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 
 ### Added
 
+- `sanctions_screen`: new `lists_stale` (lists screened from a previous load because their latest refresh failed) and `list_as_at` (each screened list's own load time) fields. `as_at` is now the oldest screened list's load time (#26).
 - `uvx uk-due-diligence-mcp` runs the server over stdio for local MCP clients: the console script now points at a new `server:main_stdio` entry point. The sanctions index loads on the first `sanctions_screen` call in this mode. The Docker image (`python server.py`) still serves streamable HTTP (#51).
 
 ### Changed
 
 - Every upstream request (Companies House, Charity Commission, The Gazette, HMLR, sanctions list downloads) sends one identifying User-Agent, `uk-due-diligence-mcp/<version>` with the project URL and maintainer contact, as the Gazette's fair-use policy asks (#86).
 - FastMCP 4.1.3 → 4.1.8 (#49).
+
+### Fixed
+
+- `sanctions_screen` keeps a list's last verified records when a refresh of that list fails, instead of dropping the list for up to 24 hours. Freshness is tracked per list; a list whose last successful load is more than 7 days old is dropped and reported in `lists_unavailable` (#26).
+- During a sanctions list outage a failed list is retried at most once per 5 minutes, instead of every call re-downloading every list (#28).
 
 ## [1.8.0] — 2026-11-21
 
