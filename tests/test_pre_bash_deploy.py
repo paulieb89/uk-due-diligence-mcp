@@ -53,6 +53,19 @@ import pytest
 _HOOK = Path(__file__).resolve().parents[1] / ".claude" / "hooks" / "pre_bash_deploy.py"
 
 
+@pytest.fixture(autouse=True)
+def project_dir(tmp_path, monkeypatch):
+    """Point every hook run at a throwaway project root.
+
+    The hook now appends deny/ask records under
+    `$CLAUDE_PROJECT_DIR/.claude/metrics/`. Without this, running the suite
+    would write synthetic deploy records into the real checkout's metrics.
+    Every subprocess below inherits os.environ, so setting it here covers them.
+    """
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    return tmp_path
+
+
 def decide(command: str, *, ack_in_env: bool = False, tool: str = "Bash") -> str | None:
     """Run the real hook on a synthetic PreToolUse payload.
 
@@ -261,3 +274,138 @@ def test_malformed_payload_without_a_deploy_stays_silent():
     )
     assert proc.returncode == 0
     assert proc.stdout.strip() == ""
+
+
+# --- issue #62: a hook-issued deny or ask was never logged ---
+#
+# PermissionDenied fires only in auto mode and not when a PreToolUse hook blocks
+# a call, so the guard has to record its own decisions. Measured 2026-09-09: a
+# refused deploy reached the debug log and left nothing in .claude/metrics/.
+
+
+def _run(payload: dict, *, ack_in_env: bool = False) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env.pop("FLY_DEPLOY_ACK", None)
+    if ack_in_env:
+        env["FLY_DEPLOY_ACK"] = "1"
+    return subprocess.run(
+        [sys.executable, str(_HOOK)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+
+def _payload(command: str) -> dict:
+    return {
+        "session_id": "s-test",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    }
+
+
+def _records(root: Path) -> list[dict]:
+    metrics = root / ".claude" / "metrics"
+    if not metrics.exists():
+        return []
+    lines: list[str] = []
+    for f in sorted(metrics.glob("*.jsonl")):
+        lines.extend(f.read_text(encoding="utf-8").splitlines())
+    return [json.loads(line) for line in lines]
+
+
+def test_denied_deploy_writes_one_record(project_dir):
+    payload = _payload("fly deploy")
+    proc = _run(payload)
+    assert proc.returncode == 0
+
+    records = _records(project_dir)
+    assert len(records) == 1
+    rec = records[0]
+    # Same shape as log_event.py: a ts, then the hook input at top level.
+    assert set(rec) == {"ts", *payload, "hookSpecificOutput"}
+    assert rec["ts"].endswith("+00:00")
+    for key, value in payload.items():
+        assert rec[key] == value
+    # The logged decision is exactly what the hook printed.
+    assert rec["hookSpecificOutput"] == json.loads(proc.stdout)["hookSpecificOutput"]
+    assert rec["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize(
+    ("command", "ack_in_env"),
+    [("FLY_DEPLOY_ACK=1 fly deploy", False), ("fly deploy", True)],
+    ids=["command-prefix", "environment"],
+)
+def test_acked_deploy_writes_one_ask_record(project_dir, command, ack_in_env):
+    proc = _run(_payload(command), ack_in_env=ack_in_env)
+    assert proc.returncode == 0
+
+    records = _records(project_dir)
+    assert len(records) == 1
+    out = records[0]["hookSpecificOutput"]
+    assert out["permissionDecision"] == "ask"
+    assert out == json.loads(proc.stdout)["hookSpecificOutput"]
+
+
+def test_each_decision_appends_exactly_one_line(project_dir):
+    _run(_payload("fly deploy"))
+    _run(_payload("FLY_DEPLOY_ACK=1 fly deploy"))
+    _run(_payload("git status"))
+
+    decisions = [r["hookSpecificOutput"]["permissionDecision"] for r in _records(project_dir)]
+    assert decisions == ["deny", "ask"]
+
+
+def test_incoming_hook_specific_output_is_overridden(project_dir):
+    """The record must carry the decision taken, not a field smuggled in."""
+    payload = {**_payload("fly deploy"), "hookSpecificOutput": {"permissionDecision": "allow"}}
+    _run(payload)
+    (rec,) = _records(project_dir)
+    assert rec["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("command", ["git status", 'echo "run fly deploy to ship"', "fly logs"])
+def test_non_deploy_bash_writes_nothing(project_dir, command):
+    proc = _run(_payload(command))
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == ""
+    assert not (project_dir / ".claude" / "metrics").exists()
+
+
+def test_non_bash_tool_writes_nothing(project_dir):
+    _run({**_payload("fly deploy"), "tool_name": "Write"})
+    assert not (project_dir / ".claude" / "metrics").exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "ack_in_env"),
+    [("fly deploy", False), ("FLY_DEPLOY_ACK=1 fly deploy", False), ("fly deploy", True)],
+    ids=["deny", "ask-prefix", "ask-env"],
+)
+def test_logging_failure_never_changes_the_decision(
+    tmp_path_factory, monkeypatch, project_dir, command, ack_in_env
+):
+    """A broken metrics dir must not fail the deploy open, or block anything else.
+
+    Deterministic failure: `.claude/metrics` is a regular file, so mkdir raises.
+    The output and exit status must match a run whose logging succeeded.
+    """
+    good_root = tmp_path_factory.mktemp("good")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(good_root))
+    good = _run(_payload(command), ack_in_env=ack_in_env)
+    assert len(_records(good_root)) == 1
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+
+    (project_dir / ".claude").mkdir()
+    blocker = project_dir / ".claude" / "metrics"
+    blocker.write_text("not a directory", encoding="utf-8")
+
+    bad = _run(_payload(command), ack_in_env=ack_in_env)
+    assert bad.returncode == good.returncode == 0
+    assert bad.stdout == good.stdout
+    assert bad.stderr == ""
+    assert blocker.read_text(encoding="utf-8") == "not a directory"

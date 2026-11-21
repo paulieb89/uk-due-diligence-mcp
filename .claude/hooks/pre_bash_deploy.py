@@ -158,13 +158,26 @@ def main() -> int:
     acked = acked_in_command or _acknowledged(os.environ.get(ACK_VAR))
     decision, reason = ("ask", ASK_REASON) if acked else ("deny", DENY_REASON)
 
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-        }
-    }))
+    output = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": reason,
+    }
+
+    # Logged here because nothing else will: PermissionDenied fires only in auto
+    # mode and not when a PreToolUse hook blocks a call. Measured 2026-09-09: a
+    # refused deploy reached the debug log and left no record in
+    # .claude/metrics/. Best-effort and narrowly guarded — a logging failure
+    # must never change the decision printed below. Imported lazily so even a
+    # broken log_event.py cannot stop this hook from loading.
+    try:
+        from log_event import append_event
+
+        append_event({**data, "hookSpecificOutput": output})
+    except Exception:
+        pass
+
+    print(json.dumps({"hookSpecificOutput": output}))
     return 0
 
 
