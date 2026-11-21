@@ -7,9 +7,12 @@ something. pytest runs fail-fast: ~18s green, ~2-3s to first failure.
 Two channels, chosen per the runtime rather than by habit:
 
   a real failure  -> exit 2, reason on stderr. The tool already ran, but the
-                     model does see the text (HOOKS-REF.md:865).
+                     model does see the text (HOOKS-REF.md § Exit code 2
+                     behavior per event).
   everything else -> exit 0 with hookSpecificOutput.additionalContext on stdout
-                     (:1969), which lands next to the tool result (:989).
+                     (HOOKS-REF.md § PostToolUse decision control), which
+                     lands next to the tool result (HOOKS-REF.md § Add context
+                     for Claude).
 
 Not stderr at exit 0. That was the original shape here and it reached nobody:
 measured 2026-09-08, the summary text sat verbatim in the transcript's
@@ -33,8 +36,8 @@ TAIL = 20
 TIMEOUT_S = 180
 
 # Counts only, never the duration. On --continue/--resume the saved text is
-# replayed rather than re-run (HOOKS-REF.md:1005), so an elapsed time would be
-# restated later as though it were fresh.
+# replayed rather than re-run (HOOKS-REF.md § Add context for Claude), so an
+# elapsed time would be restated later as though it were fresh.
 COUNTS = re.compile(r"\b(\d+)\s+(passed|failed|errors?|skipped|xfailed)\b")
 
 
@@ -57,7 +60,7 @@ def _context(text: str) -> int:
 
     Phrasing matters: text framed as an out-of-band instruction can trip
     prompt-injection defenses and be surfaced to the user instead of absorbed
-    as context (HOOKS-REF.md:1003).
+    as context (HOOKS-REF.md § Add context for Claude).
     """
     print(json.dumps({
         "hookSpecificOutput": {

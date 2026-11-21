@@ -6,16 +6,18 @@ the PyPI release silently stop describing what is running.
 
 Four outcomes, and the choice of each is load-bearing:
 
-  deploy, no ack -> "deny". The reason is shown to Claude (HOOKS-REF.md:1745),
-                    so it names the escape rather than dead-ending.
+  deploy, no ack -> "deny". The reason is shown to Claude (HOOKS-REF.md §
+                    PreToolUse decision control), so it names the escape
+                    rather than dead-ending.
   deploy, acked  -> "ask". NOT "allow": allow skips the permission prompt
-                    (:1744), and since Claude reads the deny reason it could set
-                    the variable itself and deploy with nobody watching. Plain
+                    (HOOKS-REF.md § PreToolUse decision control), and since
+                    Claude reads the deny reason it could set the variable
+                    itself and deploy with nobody watching. Plain
                     pass-through is not sufficient either — in auto mode the
                     classifier approves Bash calls silently. "ask" is the only
-                    decision documented to force a prompt anyway (:1755), and
-                    its reason is shown to the user, which is the right audience
-                    for a confirmation.
+                    decision documented to force a prompt anyway (HOOKS-REF.md
+                    § PreToolUse decision control), and its reason is shown to
+                    the user, which is the right audience for a confirmation.
   anything else  -> silent.
   crash          -> silent for an unrelated command, exit 2 when the raw payload
                     mentions a deploy. See main(); an uncaught exception exits 1,
