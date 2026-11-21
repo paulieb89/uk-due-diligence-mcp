@@ -4,6 +4,10 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 
 ## [Unreleased]
 
+### Added
+
+- `uvx uk-due-diligence-mcp` runs the server over stdio for local MCP clients: the console script now points at a new `server:main_stdio` entry point. The sanctions index loads on the first `sanctions_screen` call in this mode. The Docker image (`python server.py`) still serves streamable HTTP (#51).
+
 ### Changed
 
 - Every upstream request (Companies House, Charity Commission, The Gazette, HMLR, sanctions list downloads) sends one identifying User-Agent, `uk-due-diligence-mcp/<version>` with the project URL and maintainer contact, as the Gazette's fair-use policy asks (#86).
