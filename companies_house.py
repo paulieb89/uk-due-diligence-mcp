@@ -317,9 +317,8 @@ async def _fetch_company_profile(company_number: str) -> CompanyProfile:
         # ValueError covers a parse failure in the charges payload: the profile
         # itself is fine, so has_charges degrades to unknown instead of failing
         # the whole call.
-        logger.warning(
-            "charges check failed for %s — has_charges is unknown", company_number
-        )
+        # No company number: the privacy policy promises no query content in logs.
+        logger.warning("charges check failed — has_charges is unknown")
 
     accs_raw = data.get("accounts") or {}
     conf_raw = data.get("confirmation_statement") or {}

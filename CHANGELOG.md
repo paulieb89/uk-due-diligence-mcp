@@ -2,6 +2,14 @@
 
 All notable changes to `uk-due-diligence-mcp` are documented here, starting with 1.7.0. Earlier releases are described in their GitHub release notes.
 
+## [Unreleased]
+
+### Fixed
+
+- `charity_search` percent-encodes the query as one path segment, so `/`, `?`, `#` and `%` are searched for instead of changing the request URL (#70).
+- The sanctions startup cache warm keeps a reference to its task, so it can no longer be garbage-collected mid-flight (#67).
+- A failed charges check inside `company_profile` no longer logs the company number.
+
 ## [1.7.0] — 2026-11-18
 
 ### Breaking
