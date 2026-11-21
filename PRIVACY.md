@@ -1,6 +1,6 @@
 # Privacy Policy — UK Due Diligence MCP Server
 
-**Last updated: 28 July 2026**
+**Last updated: 21 November 2026**
 
 This policy covers the UK Due Diligence MCP server: the hosted service at
 `https://uk-due-diligence-mcp.fly.dev/mcp` and the open-source software
@@ -58,6 +58,31 @@ and UN consolidated sanctions lists, holds a searchable index of them in
 memory, and deletes the downloaded files immediately after parsing. These
 lists are official government publications; we add nothing to them.
 
+## Personal-insolvency lookups
+
+Two tools look up personal insolvency by a person's name, once they are in a
+released version (check the release notes):
+
+- `gazette_personal_insolvency` searches The Gazette's personal-insolvency
+  notices (bankruptcy orders, sequestrations, trust deeds and related notices).
+  It returns only notices published in the **last 15 months**, matching the
+  Gazette's own practice of removing such notices from search after 15 months,
+  and labels each result as a historical record.
+- `individual_insolvency_search` searches the Insolvency Service's Individual
+  Insolvency Register (England and Wales). It returns the name, birth date, case
+  type, status, order date, court and case number. It does not return postcode,
+  address, gender or occupation. The register removes a case 3 months after
+  discharge, so results reflect the register as it is now.
+
+These tools are for due diligence on the officers, persons with significant
+control and counterparties of a business. They are **not** for consumer credit
+decisions or tenant screening. Results are processed in memory for the request
+only and are not stored, like every other result.
+
+Both sources publish under the Open Government Licence, which does not cover
+personal data, so the basis for this processing is our legitimate-interests
+assessment (`docs/legitimate-interests-assessment.md` in the repository).
+
 ## Where processing happens
 
 The service runs on Fly.io infrastructure in **London, United Kingdom**.
@@ -80,6 +105,10 @@ not stored — but you can contact **paul@bouch.dev** with any request and
 we will respond within one calendar month. To correct data *in the
 registers* (e.g. your entry at Companies House), contact the relevant
 register directly.
+
+If you appear in personal-insolvency results you can **object** to this
+processing (UK GDPR Article 21) by emailing **paul@bouch.dev**. We will explain
+the processing and, if the objection is upheld, stop returning your record.
 
 You also have the right to complain to the Information Commissioner's
 Office ([ico.org.uk](https://ico.org.uk)).
