@@ -38,7 +38,9 @@ def append_event(data: dict) -> None:
         line = (json.dumps(rec, separators=(",", ":")) + "\n").encode("utf-8")
         # One record, one write in the normal case, so O_APPEND keeps concurrent
         # hooks' lines whole. os.write may still return short (signal, full
-        # disk); loop so the remainder lands rather than leaving a truncated line.
+        # disk). Retrying the remainder can recover a short write, but another
+        # appender can interleave its own write between our calls, and a later
+        # write error can still leave a partial JSONL line in the file.
         while line:
             written = os.write(fd, line)
             if written <= 0:
