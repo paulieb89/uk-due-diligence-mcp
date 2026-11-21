@@ -1241,6 +1241,22 @@ class GazetteInsolvencyResult(BaseModel):
             "page+1 to read on."
         ),
     )
+    skipped_unrecognised: int = Field(
+        0,
+        description=(
+            "Feed entries on this page dropped because their notice code is not a "
+            "known corporate insolvency code. Counted before the notice_type filter "
+            "and max_notices cap. 0 when none."
+        ),
+    )
+    unrecognised_codes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The distinct notice codes behind skipped_unrecognised, sorted. Empty when "
+            "none. These are not personal insolvency results: this tool covers "
+            "corporate insolvency only."
+        ),
+    )
     notices: list[GazetteNotice] = Field(
         default_factory=list,
         description=(

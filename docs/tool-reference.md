@@ -65,11 +65,13 @@ Companies House REST API (`CH_API_KEY`). Company numbers are 8 characters; short
 
 ## The Gazette
 
+The Gazette Notice Feed (no credentials). `gazette_insolvency` searches corporate insolvency notices (category 24) by company name. Personal insolvency (bankruptcy, IVAs, sequestrations, trust deeds) is not covered, so an empty result says nothing about any individual such as a director or PSC; check people on the Individual Insolvency Register. Feed entries with a notice code outside the known corporate taxonomy are reported in `skipped_unrecognised` and `unrecognised_codes`.
+
 <!-- BEGIN GENERATED: tools prefix=gazette_ -->
 | Tool | Title | Summary |
 |---|---|---|
 | `gazette_notice` | Get Gazette Notice Full Text | Fetch the full legal wording of a Gazette notice by numeric notice ID. |
-| `gazette_insolvency` | Search Gazette Corporate Insolvency Notices | Search The Gazette's insolvency notice index by entity name. |
+| `gazette_insolvency` | Search Gazette Corporate Insolvency Notices | Search The Gazette's corporate insolvency notices by company name. |
 <!-- END GENERATED -->
 
 <!-- BEGIN GENERATED: templates prefix=notice:// -->

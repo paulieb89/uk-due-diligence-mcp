@@ -199,6 +199,110 @@ async def test_unrecognised_codes_still_count_as_fetched_entries(monkeypatch, mc
 
     assert data["total_notices"] == 1
     assert data["is_partial"] is False
+    assert data["skipped_unrecognised"] == 1
+    assert data["unrecognised_codes"] == ["2503"]
+
+
+# ---------------------------------------------------------------------------
+# skipped_unrecognised / unrecognised_codes (#69)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_unrecognised_codes_are_reported(monkeypatch, mcp_client):
+    entries = [_entry(1, "2452"), _entry(2, "9998"), _entry(3, "2443"), _entry(4, "9999")]
+    _use_feed(monkeypatch, {"f:total": 4, "entry": entries})
+
+    data = await _call(mcp_client)
+
+    assert data["skipped_unrecognised"] == 2
+    assert data["unrecognised_codes"] == ["9998", "9999"]
+    assert [n["notice_code"] for n in data["notices"]] == ["2452", "2443"]
+    assert data["is_partial"] is False
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_codes_sorted_and_distinct_but_entries_counted(monkeypatch, mcp_client):
+    entries = [_entry(1, "9999"), _entry(2, "9998"), _entry(3, "9999"), _entry(4, "2452")]
+    _use_feed(monkeypatch, {"f:total": 4, "entry": entries})
+
+    data = await _call(mcp_client)
+
+    assert data["skipped_unrecognised"] == 3
+    assert data["unrecognised_codes"] == ["9998", "9999"]
+
+
+@pytest.mark.asyncio
+async def test_absent_code_is_reported_as_empty_string(monkeypatch, mcp_client):
+    entry = _entry(1)
+    del entry["f:notice-code"]
+    _use_feed(monkeypatch, {"f:total": 2, "entry": [entry, _entry(2, "2452")]})
+
+    data = await _call(mcp_client)
+
+    assert data["skipped_unrecognised"] == 1
+    assert data["unrecognised_codes"] == [""]
+    assert data["total_notices"] == 1
+
+
+@pytest.mark.asyncio
+async def test_no_unrecognised_codes_gives_zero_and_empty_list(monkeypatch, mcp_client):
+    _use_feed(monkeypatch, {"f:total": 0})
+
+    data = await _call(mcp_client)
+
+    assert data["skipped_unrecognised"] == 0
+    assert data["unrecognised_codes"] == []
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_counts_ignore_notice_type_filter_and_cap(monkeypatch, mcp_client):
+    entries = [
+        _entry(1, "2452"), _entry(2, "2443"), _entry(3, "2443"), _entry(4, "9998"),
+    ]
+    _use_feed(monkeypatch, {"f:total": 200, "entry": entries})
+
+    data = await _call(mcp_client, notice_type="2443", max_notices=1)
+
+    assert data["total_notices"] == 1
+    assert data["skipped_unrecognised"] == 1
+    assert data["unrecognised_codes"] == ["9998"]
+    assert data["is_partial"] is True
+
+
+# ---------------------------------------------------------------------------
+# Corporate-only scope in the registered schema (#69)
+# ---------------------------------------------------------------------------
+
+async def _insolvency_tool(mcp_client):
+    tools = {t.name: t for t in await mcp_client.list_tools()}
+    return tools["gazette_insolvency"]
+
+
+@pytest.mark.asyncio
+async def test_parameter_descriptions_do_not_mention_individuals(mcp_client):
+    tool = await _insolvency_tool(mcp_client)
+    props = tool.input_schema["properties"]
+
+    for param in ("name", "query", "entity_name"):
+        assert "company name" in props[param]["description"].lower(), param
+    for param, schema in props.items():
+        assert "individual" not in str(schema).lower(), param
+
+
+@pytest.mark.asyncio
+async def test_description_mentions_individuals_only_in_not_covered_statement(mcp_client):
+    tool = await _insolvency_tool(mcp_client)
+    paragraphs = [p for p in tool.description.split("\n\n") if p.strip()]
+
+    mentioning = [p for p in paragraphs if "individual" in p.lower()]
+    assert len(mentioning) == 1
+    [statement] = mentioning
+    flat = " ".join(statement.split())
+    assert "Personal insolvency" in flat
+    assert "not covered" in flat
+    assert "Individual Insolvency Register" in flat
+    for term in ("bankruptcy", "IVAs", "sequestrations", "trust deeds"):
+        assert term in flat
 
 
 @pytest.mark.asyncio
