@@ -14,7 +14,7 @@ def _entry(code: str, notice_id: str) -> dict:
 
 
 def test_mel_notice_codes_match_authoritative_gazette_taxonomy():
-    notices = _extract_notices(
+    notices, skipped, codes = _extract_notices(
         [
             _entry("2443", "4611709"),
             _entry("2441", "4611652"),
@@ -22,6 +22,8 @@ def test_mel_notice_codes_match_authoritative_gazette_taxonomy():
             _entry("2442", "4582848"),
         ]
     )
+    assert skipped == 0
+    assert codes == []
     by_code = {n["notice_code"]: n for n in notices}
 
     assert by_code["2443"]["notice_type"] == "Appointment of liquidators (creditors' voluntary)"
@@ -39,3 +41,34 @@ def test_winding_up_order_is_2452_and_highest_severity():
 def test_members_voluntary_winding_up_is_not_treated_as_high_distress():
     assert NOTICE_LABELS["2431"] == "Resolution for winding up (members' voluntary)"
     assert SEVERITY["2431"] <= 1
+
+
+def test_unrecognised_codes_are_counted_sorted_and_distinct():
+    notices, skipped, codes = _extract_notices(
+        [
+            _entry("9999", "1"),
+            _entry("2452", "2"),
+            _entry("9998", "3"),
+            _entry("9999", "4"),
+        ]
+    )
+
+    assert [n["notice_code"] for n in notices] == ["2452"]
+    # Entries are counted, codes are listed once each.
+    assert skipped == 3
+    assert codes == ["9998", "9999"]
+
+
+def test_missing_code_counts_as_unrecognised_empty_string():
+    entry = _entry("2452", "1")
+    del entry["f:notice-code"]
+
+    notices, skipped, codes = _extract_notices([entry])
+
+    assert notices == []
+    assert skipped == 1
+    assert codes == [""]
+
+
+def test_no_entries_gives_zero_and_empty_list():
+    assert _extract_notices([]) == ([], 0, [])

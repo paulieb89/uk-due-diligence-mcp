@@ -113,7 +113,7 @@ The authoritative, generated list of tools and resources is [docs/tool-reference
 
 | Tool | Description |
 |------|-------------|
-| `gazette_insolvency` | Corporate insolvency notices across the Gazette's notice-code taxonomy (codes 2401-2465) |
+| `gazette_insolvency` | Corporate insolvency notices by company name across the Gazette's notice-code taxonomy (codes 2401-2465). Personal insolvency (bankruptcy, IVAs, sequestrations, trust deeds) is not covered: an empty result says nothing about any individual. The Individual Insolvency Register covers England and Wales only; Scotland (Accountant in Bankruptcy) and Northern Ireland have separate registers |
 | `gazette_notice` | Full legal wording of a specific notice |
 
 **Sanctions**

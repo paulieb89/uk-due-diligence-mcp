@@ -23,7 +23,11 @@ from models import GazetteInsolvencyResult, GazetteNotice
 # ---------------------------------------------------------------------------
 
 # Corporate insolvency codes from The Gazette's authoritative notice-code register.
-# Personal insolvency codes (2500+) are excluded.
+# gazette_insolvency is corporate-only: it requests category 24 and returns only
+# these codes. Personal insolvency is out of scope here and belongs to the
+# separate opt-in tools tracked in #84 (gazette_personal_insolvency) and #85
+# (individual_insolvency_search). Any other code the feed returns is counted in
+# skipped_unrecognised / unrecognised_codes rather than dropped silently.
 NOTICE_LABELS: dict[str, str] = {
     "2401": "Moratorium – coming into force",
     "2402": "Moratorium – coming to an end",
@@ -104,12 +108,23 @@ def _notice_numeric_id(notice_uri: str) -> str:
     return notice_uri.rstrip("/").split("/")[-1]
 
 
-def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Pull structured insolvency notice records from the Gazette feed entry array."""
+def _extract_notices(
+    entries: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, list[str]]:
+    """Pull structured insolvency notice records from the Gazette feed entry array.
+
+    Returns (notices, skipped_unrecognised, unrecognised_codes): the corporate
+    notices sorted by severity then date, the number of entries dropped because
+    their code is not in NOTICE_LABELS, and those codes sorted and distinct.
+    """
     notices = []
+    skipped = 0
+    unrecognised: set[str] = set()
     for entry in entries:
         code = str(entry.get("f:notice-code", ""))
         if code not in ALL_CORPORATE_INSOLVENCY_CODES:
+            skipped += 1
+            unrecognised.add(code)
             continue
         notice_uri = entry.get("id", "")
         raw_content = entry.get("content", "")
@@ -129,7 +144,7 @@ def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key=lambda n: (SEVERITY.get(n["notice_code"], 0), n["date"] or ""),
         reverse=True,
     )
-    return notices
+    return notices, skipped, sorted(unrecognised)
 
 
 # The Notice Feed caps results-page-size at 100.
@@ -232,20 +247,28 @@ def register_tools(mcp: FastMCP) -> None:
         },
     )
     async def gazette_insolvency(
-        name: Annotated[str | None, Field(description="Company or individual name to search for in Gazette insolvency notices", min_length=2, max_length=200)] = None,
-        query: Annotated[str | None, Field(description="Alias for name.", min_length=2, max_length=200)] = None,
-        entity_name: Annotated[str | None, Field(description="Deprecated alias for name.", min_length=2, max_length=200)] = None,
+        name: Annotated[str | None, Field(description="Company name to search for in Gazette corporate insolvency notices", min_length=2, max_length=200)] = None,
+        query: Annotated[str | None, Field(description="Alias for name: the company name to search for.", min_length=2, max_length=200)] = None,
+        entity_name: Annotated[str | None, Field(description="Deprecated alias for name: the company name to search for.", min_length=2, max_length=200)] = None,
         notice_type: Annotated[str | None, Field(description="Filter by Gazette notice code (e.g. '2450' petition to wind up a company, '2452' winding-up order, '2410' appointment of administrators). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
         max_notices: Annotated[int, Field(description="Cap on notices returned from this page, applied after the severity/date sort. Default 20. One call reads one page of at most 100 feed entries, so 100 removes the cap for that page (notice_type and code filters still apply); it does not reach every match: compare upstream_total and use page to read further.", ge=1, le=100)] = 20,
         page: Annotated[int, Field(description="1-based page of the Gazette feed to read (100 entries per page). Default 1. Use with upstream_total to read past the first 100 matches.", ge=1)] = 1,
     ) -> GazetteInsolvencyResult:
-        """Search The Gazette's insolvency notice index by entity name.
+        """Search The Gazette's corporate insolvency notices by company name.
 
-        Searches The Gazette's corporate-insolvency notice index using the
-        authoritative Gazette notice-code taxonomy. Results are sorted by an
-        internal DD severity score; the notice label itself remains a source fact.
+        Searches The Gazette's corporate-insolvency notice index (category 24)
+        using the authoritative Gazette notice-code taxonomy. Results are sorted
+        by an internal DD severity score; the notice label itself remains a
+        source fact.
+
+        Corporate only. Personal insolvency (bankruptcy, IVAs, sequestrations,
+        trust deeds) is not covered, so an empty result says nothing about any
+        individual, such as a director or PSC. The Individual Insolvency
+        Register covers England and Wales only; Scottish sequestrations and
+        trust deeds are on the Accountant in Bankruptcy register, and Northern
+        Ireland has its own register.
 
         One call reads one page of at most 100 feed entries (page, 1-based);
         it never fetches further pages. upstream_total is the feed's count of
@@ -255,6 +278,11 @@ def register_tools(mcp: FastMCP) -> None:
         unknown. The severity sort and max_notices cap apply within the page,
         so the most severe notices shown are the most severe on this page,
         not across every match.
+
+        skipped_unrecognised counts entries on this page whose notice code is
+        not a known corporate code, and unrecognised_codes lists those codes.
+        They are a diagnostic for codes the taxonomy does not label yet, not a
+        sign of personal insolvency coverage.
 
         Each result includes a notice_numeric_id. Read the full legal wording
         via the notice://{notice_numeric_id} resource.
@@ -268,7 +296,7 @@ def register_tools(mcp: FastMCP) -> None:
                 "validation",
                 is_retryable=False,
                 attempted="gazette_insolvency(name=None)",
-                description="Provide 'name' (or 'query') — the company or individual name to search for.",
+                description="Provide 'name' (or 'query'): the company name to search for.",
             )
         qs: dict[str, Any] = {
             # `text` is not in the Notice Feed parameter table, but it works
@@ -287,6 +315,8 @@ def register_tools(mcp: FastMCP) -> None:
 
         all_notices: list[dict[str, Any]] = []
         entries_fetched = 0
+        skipped_unrecognised = 0
+        unrecognised_codes: list[str] = []
         upstream_total: int | None = None
 
         async with gazette_client() as client:
@@ -300,7 +330,7 @@ def register_tools(mcp: FastMCP) -> None:
                 # max_notices filters: is_partial is about the feed, not the filters.
                 entries_fetched = len(entries)
                 upstream_total = _feed_total(raw)
-                all_notices = _extract_notices(entries)
+                all_notices, skipped_unrecognised, unrecognised_codes = _extract_notices(entries)
             except ToolError:
                 # Already a structured fleet error (e.g. persistent 429/503) —
                 # propagate as-is rather than masking it as an empty,
@@ -347,6 +377,8 @@ def register_tools(mcp: FastMCP) -> None:
                 upstream_total is None
                 or upstream_total > (page - 1) * FEED_PAGE_SIZE + entries_fetched
             ),
+            skipped_unrecognised=skipped_unrecognised,
+            unrecognised_codes=unrecognised_codes,
             notices=notice_models,
         )
 
