@@ -17,6 +17,7 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 
 - `sanctions_screen` keeps a list's last verified records when a refresh of that list fails, instead of dropping the list for up to 24 hours. Freshness is tracked per list; a list whose last successful load is more than 7 days old is dropped and reported in `lists_unavailable` (#26).
 - During a sanctions list outage a failed list is retried at most once per 5 minutes, instead of every call re-downloading every list (#28).
+- Sanctions bulk-list downloads now retry a 429, 503, timeout or connection error under the shared retry policy (3 attempts with backoff), still streaming to disk, and a final failure is logged as a structured error. A failed download no longer leaves its temp file behind (#68).
 
 ## [1.8.0] — 2026-11-21
 
