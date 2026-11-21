@@ -1,16 +1,18 @@
 ---
-status: draft
+status: signed-off
 as_of: 2026-11-21
+signed_off: 2026-11-21
+review_by: 2027-11-21
 covers: "#84 gazette_personal_insolvency, #85 individual_insolvency_search"
 owner: Paul Boucherat (controller)
 ---
 
 # Legitimate interests assessment: personal-insolvency lookups
 
-> **DRAFT for the controller to review, edit and sign off.** Drafted by an agent
-> from the 2026-11-21 research. It is not legal advice. Items marked **[CONFIRM]**
-> are judgements only the controller can make. Neither tool ships until this is
-> signed off and `PRIVACY.md` is updated (see Actions).
+> **Signed off 2026-11-21 by the controller.** Drafted by an agent from the
+> 2026-11-21 research; the controller's decisions are marked **Decision
+> (2026-11-21)**. It is not legal advice. Neither tool merges until `PRIVACY.md`
+> is updated (see Actions).
 
 Structure follows the ICO's three-part test: purpose, necessity, balancing.
 https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/lawful-basis/legitimate-interests/
@@ -22,11 +24,12 @@ Two proposed tools in the hosted `uk-due-diligence-mcp` server:
 | Tool | Source | Personal data returned |
 |---|---|---|
 | `gazette_personal_insolvency` (#84) | The Gazette, personal-insolvency notices (category 25) | Name, notice type, publish date, notice text (which can include address, date of birth, occupation) |
-| `individual_insolvency_search` (#85) | Insolvency Service, Individual Insolvency Register (England & Wales) | Name, case type, status, order date, court and case number. **[CONFIRM]** whether birth date and postcode are returned (useful to disambiguate a common name; more intrusive) |
+| `individual_insolvency_search` (#85) | Insolvency Service, Individual Insolvency Register (England & Wales) | Name, birth date, case type, status, order date, court and case number. **Decision (2026-11-21):** birth date is returned, because it is the register's own way to tell apart people with a common name, and a false match is the main due-diligence risk. Postcode, address, gender and occupation are not returned. |
 
 How it happens: an AI client calls the tool with a person's name. The server
 queries the public source, returns the result and keeps nothing: no database,
-no cache, no query content in logs (`PRIVACY.md`).
+no cache, no query content in logs (`PRIVACY.md`). The hosting provider's
+standard server logs record client IP addresses, as `PRIVACY.md` already states.
 
 Data subjects: individuals who are, or were recently, subject to a personal
 insolvency process.
@@ -51,9 +54,11 @@ procedure, or has had a recent insolvency event.
 - **Our interest:** offering a complete due-diligence tool. Without it, the
   server's company-only coverage pushes users to less controlled sources.
 
-**[CONFIRM]** that these are the intended uses, and whether any use should be
-excluded (e.g. consumer or tenant screening, which raises different
-expectations).
+**Decision (2026-11-21):** these are the intended uses: due diligence on the
+officers, persons with significant control and counterparties of a business.
+Consumer credit decisions and tenant screening are **excluded**: they raise
+different expectations and fall outside this assessment. The tool descriptions
+and `PRIVACY.md` say so.
 
 ## 2. Necessity test: is this processing necessary for that purpose?
 
@@ -65,7 +70,7 @@ expectations).
   authoritative source and the tools point to it.
 - **Minimisation applied:**
   - name queries only, no browsing or bulk listing;
-  - only DD-relevant fields returned (see #85 field decision);
+  - only DD-relevant fields returned (#85: no postcode, address, gender or occupation);
   - Gazette results limited to the last **15 months** (below);
   - nothing stored.
 
@@ -102,19 +107,25 @@ records if "you must be clear that it is a historical record".
    `is_historical_record: true`, and the description points to the register for
    current status.
 4. **No storage, no profiling:** nothing kept or combined across calls by the
-   server. **[CONFIRM]** that this holds for the hosted service's logs and metrics
-   (currently client name and version, tool-call counts, no query content).
+   server. **Verified 2026-11-21:** metrics carry only tool, client, transport,
+   region and status labels; argument-validation warnings log error *types*,
+   not values; no query content appears in the prod logs. The hosting
+   provider's access logs record client IP addresses (disclosed in
+   `PRIVACY.md`).
 5. **Name-led lookup only:** no listing, no "all bankruptcies this week".
 6. **Annulment handling:** open question in #84. A Gazette bankruptcy order
    followed by an annulment notice should not be presented as live. Until
    matching notices to the same case is reliable, the historical label and the
-   register pointer are the mitigation. **[CONFIRM]** this is acceptable.
+   register pointer are the mitigation. **Decision (2026-11-21):** accepted. No
+   cross-notice suppression, because matching notices by name alone is
+   unreliable; every result carries the historical label and the pointer to the
+   register for current status.
 7. **Scope stated:** England & Wales only for #85; Scotland (Accountant in
    Bankruptcy) not covered, and the tool says so.
 
-**Conclusion (draft).** With safeguards 1–7, the processing appears to fall
-within reasonable expectations and to be proportionate for due-diligence use.
-**[CONFIRM]** the conclusion, or record the changes needed.
+**Conclusion (signed off 2026-11-21).** With safeguards 1–7, and consumer and
+tenant screening excluded, the processing falls within reasonable expectations
+and is proportionate for due-diligence use.
 
 ## Individuals' rights
 
@@ -124,15 +135,16 @@ within reasonable expectations and to be proportionate for due-diligence use.
 - **Right to object (Art. 21):** `PRIVACY.md` explains how to object
   (paul@bouch.dev). Because nothing is stored, an objection is handled by
   explaining the processing and, where it is upheld, excluding that person's
-  name from results. **[CONFIRM]** whether to support a suppression list, which
-  would be the first stored personal data.
+  name from results. **Decision (2026-11-21):** no suppression list for now; it
+  would be the first stored personal data. Objections are handled case by case,
+  and the question is revisited if one is upheld.
 - **Correction:** errors in the source data are corrected by the publisher;
   `PRIVACY.md` already points people to the registers.
 
 ## Actions before either tool ships
 
-- [ ] Controller reviews this draft, resolves every **[CONFIRM]**, sets `status: signed-off` with a date
-- [ ] `PRIVACY.md`: add the Gazette personal-insolvency notices and the Individual Insolvency Register as sources of personal data; the 15-month window; the right to object; update "Last updated"
-- [ ] #85: decide the returned fields (birth date and postcode or not)
-- [ ] #84: decide annulment handling
+- [x] Controller reviews this draft, resolves every open item, sets `status: signed-off` with a date (2026-11-21)
+- [x] `PRIVACY.md`: add the Gazette personal-insolvency notices and the Individual Insolvency Register as sources of personal data; the 15-month window; the right to object; update "Last updated" (same PR)
+- [x] #85: decide the returned fields (birth date yes; postcode no)
+- [x] #84: decide annulment handling (historical label + register pointer; no suppression)
 - [ ] Review this assessment if either tool's scope, sources or retention changes, and at least yearly
