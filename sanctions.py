@@ -74,6 +74,9 @@ _LOADED_MONO: float | None = None
 _LISTS_OK: list[str] = []
 _FAILED_MONO: float | None = None  # when a build last produced zero lists
 _LOCK = asyncio.Lock()
+# Strong references to in-flight warm tasks: the event loop only holds weak
+# references, so an unreferenced task can be garbage-collected mid-flight.
+_WARM_TASKS: set[asyncio.Task[None]] = set()
 
 
 def _log(msg: str) -> None:
@@ -461,7 +464,9 @@ async def warm_cache() -> None:
         except Exception as exc:
             _log(f"startup warm failed (will lazy-load on first call): {exc}")
 
-    asyncio.create_task(_run())
+    task = asyncio.create_task(_run())
+    _WARM_TASKS.add(task)
+    task.add_done_callback(_WARM_TASKS.discard)
 
 
 def _screen(index: dict[str, list[Record]], name: str, entity_type: str | None) -> list[SanctionsHit]:
