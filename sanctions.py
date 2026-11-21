@@ -525,8 +525,9 @@ def _snapshot(now: float) -> IndexSnapshot:
     unavailable = [label for label in _EXPECTED_LISTS if label not in _LIST_LOADED_MONO]
     stale = [label for label in screened if label in _LIST_FAILED_MONO]
     list_as_at = {label: _LIST_AS_AT[label] for label in screened}
-    oldest = min(screened, key=lambda label: _LIST_LOADED_MONO[label], default=None)
-    as_at = _LIST_AS_AT[oldest] if oldest is not None else None
+    # The oldest *reported* UTC time, not the earliest monotonic load: the wall clock
+    # can step between loads, and as_at must never look fresher than any list_as_at.
+    as_at = min(list_as_at.values(), key=datetime.fromisoformat, default=None)
     past_ttl = any(not _fresh(label, now) for label in screened)
     return IndexSnapshot(
         index=_INDEX,

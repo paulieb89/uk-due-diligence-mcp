@@ -39,6 +39,9 @@ MAX_STALE = sanctions.MAX_STALE_SECONDS
 class Clock:
     def __init__(self) -> None:
         self.t = 1_000.0
+        # Added to the UTC clock only, so wall-clock steps can be simulated while the
+        # monotonic clock keeps advancing.
+        self.utc_shift = 0.0
 
     def iso(self, t: float | None = None) -> str:
         return (EPOCH + timedelta(seconds=self.t if t is None else t)).isoformat()
@@ -51,10 +54,14 @@ class Upstream:
         self.failing: set[str] = set()
         self.calls: Counter[str] = Counter()
         self.extra: dict[str, list[str]] = {}
+        self.on_download: dict[str, object] = {}
 
     async def download(self, url: str) -> str:
         label = LABEL_BY_URL[url]
         self.calls[label] += 1
+        hook = self.on_download.get(label)
+        if hook is not None:
+            hook()
         await asyncio.sleep(0)  # yield, so concurrent callers really interleave
         if label in self.failing:
             raise RuntimeError("upstream unreachable")
@@ -73,7 +80,7 @@ class Upstream:
 def clock(monkeypatch) -> Clock:
     c = Clock()
     monkeypatch.setattr(sanctions, "_clock", lambda: c.t)
-    monkeypatch.setattr(sanctions, "_utc_now", lambda: EPOCH + timedelta(seconds=c.t))
+    monkeypatch.setattr(sanctions, "_utc_now", lambda: EPOCH + timedelta(seconds=c.t + c.utc_shift))
     return c
 
 
@@ -186,14 +193,22 @@ async def test_list_older_than_max_stale_age_is_dropped_and_reported_unavailable
 
 @pytest.mark.asyncio
 async def test_list_expired_during_the_failed_refresh_itself_is_unavailable(clock, upstream, mcp_client):
+    """UN is still servable when the refresh starts but passes MAX_STALE while it runs."""
     t0 = clock.t
     await _screen(mcp_client)
     upstream.failing = {"UN"}
-    clock.t = t0 + MAX_STALE + 1
+    clock.t = t0 + TTL + 1  # every list due, nothing expired yet
 
+    def slow_un_download() -> None:
+        clock.t = t0 + MAX_STALE + 1
+
+    upstream.on_download = {"UN": slow_un_download}
     data = await _screen(mcp_client)
+    assert upstream.calls["UN"] == 2, "UN was attempted, so the expiry is the post-refresh check"
     assert data["lists_unavailable"] == ["UN"]
     assert data["lists_stale"] == []
+    assert "UN" not in data["list_as_at"]
+    assert data["lists_screened"] == ["OFAC (US)", "EU", "OFSI (UK)"]
 
 
 @pytest.mark.asyncio
@@ -273,6 +288,60 @@ async def test_as_at_is_the_oldest_list_load_time(clock, upstream, mcp_client):
     assert data["as_at"] == clock.iso(t0), "as_at must be the oldest, not the latest, load"
     assert data["lists_unavailable"] == []
     assert data["is_partial"] is False
+
+
+@pytest.mark.asyncio
+async def test_as_at_is_the_oldest_utc_time_even_when_the_wall_clock_steps_back(
+    clock, upstream, mcp_client
+):
+    """as_at follows the reported UTC times, not the monotonic load order."""
+    t0 = clock.t
+    upstream.failing = {"UN"}
+    await _screen(mcp_client)  # OFAC, EU, OFSI load first (monotonic)
+
+    clock.t = t0 + COOLDOWN  # monotonic advances...
+    clock.utc_shift = -3600.0  # ...while the wall clock steps back an hour
+    upstream.failing = set()
+    data = await _screen(mcp_client)
+
+    un_as_at = (EPOCH + timedelta(seconds=t0 + COOLDOWN - 3600)).isoformat()
+    assert data["list_as_at"]["UN"] == un_as_at
+    assert data["list_as_at"]["OFAC (US)"] == clock.iso(t0)
+    assert un_as_at < clock.iso(t0)
+    assert data["as_at"] == un_as_at, "as_at must be the minimum of list_as_at"
+    assert data["as_at"] == min(data["list_as_at"].values())
+
+
+@pytest.mark.asyncio
+async def test_healthy_list_reaching_its_ttl_during_another_lists_cooldown_refreshes_alone(
+    clock, upstream, mcp_client
+):
+    """Staggered clocks: OFAC's TTL expires while UN cools down; only OFAC is fetched."""
+    t0 = clock.t
+    upstream.failing = {"OFAC (US)"}
+    await _screen(mcp_client)
+    clock.t = t0 + COOLDOWN
+    upstream.failing = set()
+    await _screen(mcp_client)  # OFAC loads COOLDOWN later than the rest
+    assert upstream.calls == Counter({"OFAC (US)": 2, "EU": 1, "UN": 1, "OFSI (UK)": 1})
+
+    # EU, UN, OFSI reach their TTL; UN fails and starts cooling down. OFAC is still fresh.
+    clock.t = t0 + TTL + 1
+    upstream.failing = {"UN"}
+    data = await _screen(mcp_client)
+    assert upstream.calls == Counter({"OFAC (US)": 2, "EU": 2, "UN": 2, "OFSI (UK)": 2})
+    assert data["lists_stale"] == ["UN"]
+
+    # Inside UN's cooldown, OFAC reaches its own TTL and is refreshed on its own.
+    clock.t = t0 + COOLDOWN + TTL
+    assert sanctions._cooling_down("UN", clock.t)
+    data = await _screen(mcp_client)
+    assert upstream.calls == Counter({"OFAC (US)": 3, "EU": 2, "UN": 2, "OFSI (UK)": 2})
+    assert data["list_as_at"]["OFAC (US)"] == clock.iso()
+    assert data["list_as_at"]["EU"] == clock.iso(t0 + TTL + 1)
+    assert data["list_as_at"]["UN"] == clock.iso(t0)
+    assert data["lists_stale"] == ["UN"]
+    assert data["as_at"] == clock.iso(t0)
 
 
 @pytest.mark.asyncio
