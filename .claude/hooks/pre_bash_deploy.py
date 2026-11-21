@@ -170,6 +170,8 @@ def main() -> int:
     # .claude/metrics/. Best-effort and narrowly guarded — a logging failure
     # must never change the decision printed below. Imported lazily so even a
     # broken log_event.py cannot stop this hook from loading.
+    # append_event never blocks on its sink (non-blocking open, regular files
+    # only), so a stalled metrics path cannot hold the decision past the timeout.
     try:
         from log_event import append_event
 

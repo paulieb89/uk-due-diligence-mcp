@@ -409,3 +409,60 @@ def test_logging_failure_never_changes_the_decision(
     assert bad.stdout == good.stdout
     assert bad.stderr == ""
     assert blocker.read_text(encoding="utf-8") == "not a directory"
+
+
+def _metrics_paths(root: Path) -> list[Path]:
+    """Today's and tomorrow's UTC metrics files, so a run spanning midnight still hits one."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    metrics = root / ".claude" / "metrics"
+    return [metrics / f"{d:%Y-%m-%d}.jsonl" for d in (now, now + timedelta(days=1))]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs os.mkfifo")
+@pytest.mark.parametrize(
+    ("command", "ack_in_env"),
+    [("fly deploy", False), ("FLY_DEPLOY_ACK=1 fly deploy", False), ("fly deploy", True)],
+    ids=["deny", "ask-prefix", "ask-env"],
+)
+def test_stalled_metrics_sink_never_holds_up_the_decision(
+    tmp_path_factory, monkeypatch, project_dir, command, ack_in_env
+):
+    """A FIFO with no reader at the daily metrics path must not hang the hook.
+
+    A blocking open("a") on such a FIFO waits forever; the runtime then kills the
+    hook on timeout and discards its output, so the deploy is not blocked. The
+    hook must exit promptly with the same JSON as a run whose logging succeeded.
+    """
+    good_root = tmp_path_factory.mktemp("good")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(good_root))
+    good = _run(_payload(command), ack_in_env=ack_in_env)
+    assert len(_records(good_root)) == 1
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(project_dir))
+
+    paths = _metrics_paths(project_dir)
+    paths[0].parent.mkdir(parents=True)
+    for p in paths:
+        os.mkfifo(p)
+
+    env = dict(os.environ)
+    env.pop("FLY_DEPLOY_ACK", None)
+    if ack_in_env:
+        env["FLY_DEPLOY_ACK"] = "1"
+    try:
+        bad = subprocess.run(
+            [sys.executable, str(_HOOK)],
+            input=json.dumps(_payload(command)),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("hook blocked on a stalled metrics sink instead of deciding")
+
+    assert bad.returncode == good.returncode == 0
+    assert bad.stdout == good.stdout
+    assert bad.stderr == ""
+    assert json.loads(bad.stdout)["hookSpecificOutput"]["permissionDecision"] in {"deny", "ask"}
