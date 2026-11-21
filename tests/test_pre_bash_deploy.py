@@ -31,11 +31,13 @@ on 2026-09-09.
 
 The ACK path returns `"ask"`, deliberately, and the two ACK cases below assert
 that exact string rather than "not deny". `"allow"` would skip the permission
-prompt entirely (HOOKS-REF.md:1744), and since a `"deny"` reason is shown to
-*Claude* (:1745), an agent that read the reason could set the variable and
-deploy with no human involved. `"ask"` is the only decision documented to force
-a prompt even in auto mode (:1755). A hook returning `"allow"` would satisfy a
-weaker assertion while carrying the whole defect.
+prompt entirely (HOOKS-REF.md § PreToolUse decision control), and since a
+`"deny"` reason is shown to *Claude* (HOOKS-REF.md § PreToolUse decision
+control), an agent that read the reason could set the variable and deploy with
+no human involved. `"ask"` is the only decision documented to force a prompt
+even in auto mode (HOOKS-REF.md § PreToolUse decision control). A hook
+returning `"allow"` would satisfy a weaker assertion while carrying the whole
+defect.
 """
 
 from __future__ import annotations
