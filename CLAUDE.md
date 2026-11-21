@@ -67,6 +67,11 @@ in `docs/plans/TEMPLATE-handoff.md`), linked from its issue. Plans with
 `status: active` are current; read a handoff as a claim as of its `as_of`
 commit, not as current truth. `docs/archive/` is frozen. Don't edit it.
 
+Markers are `TODO`/`FIXME` in code files only; `/prime` finds them with `git grep`
+(#71). A verified claim about runtime behaviour goes in `.claude/hooks/FIELD-NOTES.md`;
+when a note becomes a standing constraint, promote it into a hook, a
+`check_invariants.py` check or a test at review time (#72).
+
 ## Foreman
 
 Foreman, the software factory behind `eve-sf-app`, also works on this repo.
