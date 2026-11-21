@@ -9,6 +9,7 @@ replaced with an httpx MockTransport that records every request.
 
 from __future__ import annotations
 
+import re
 from collections import deque
 
 import httpx
@@ -289,18 +290,24 @@ async def test_parameter_descriptions_do_not_mention_individuals(mcp_client):
         assert "individual" not in str(schema).lower(), param
 
 
+_ALLOWED_INDIVIDUAL_SENTENCES = {
+    "Personal insolvency (bankruptcy, IVAs, sequestrations, trust deeds) is not covered, "
+    "so an empty result says nothing about any individual, such as a director or PSC.",
+    "The Individual Insolvency Register covers England and Wales only; Scottish "
+    "sequestrations and trust deeds are on the Accountant in Bankruptcy register, "
+    "and Northern Ireland has its own register.",
+}
+
+
 @pytest.mark.asyncio
 async def test_description_mentions_individuals_only_in_not_covered_statement(mcp_client):
     tool = await _insolvency_tool(mcp_client)
-    paragraphs = [p for p in tool.description.split("\n\n") if p.strip()]
+    flat = " ".join(tool.description.split())
+    sentences = re.split(r"(?<=[.!?])\s+", flat)
 
-    mentioning = [p for p in paragraphs if "individual" in p.lower()]
-    assert len(mentioning) == 1
-    [statement] = mentioning
-    flat = " ".join(statement.split())
-    assert "Personal insolvency" in flat
-    assert "not covered" in flat
-    assert "Individual Insolvency Register" in flat
+    mentioning = {s for s in sentences if "individual" in s.lower()}
+    assert mentioning == _ALLOWED_INDIVIDUAL_SENTENCES
+    assert "England and Wales only" in flat
     for term in ("bankruptcy", "IVAs", "sequestrations", "trust deeds"):
         assert term in flat
 

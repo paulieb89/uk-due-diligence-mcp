@@ -265,8 +265,10 @@ def register_tools(mcp: FastMCP) -> None:
 
         Corporate only. Personal insolvency (bankruptcy, IVAs, sequestrations,
         trust deeds) is not covered, so an empty result says nothing about any
-        individual, such as a director or PSC. To check a person, use the
-        Individual Insolvency Register.
+        individual, such as a director or PSC. The Individual Insolvency
+        Register covers England and Wales only; Scottish sequestrations and
+        trust deeds are on the Accountant in Bankruptcy register, and Northern
+        Ireland has its own register.
 
         One call reads one page of at most 100 feed entries (page, 1-based);
         it never fetches further pages. upstream_total is the feed's count of
