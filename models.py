@@ -1331,36 +1331,53 @@ class SanctionsScreenResult(BaseModel):
     lists_screened: list[str] = Field(
         default_factory=list,
         description=(
-            "Which consolidated lists were fully loaded and actually screened for this "
-            "call. A list absent here was NOT screened — see lists_unavailable. Note a "
-            "list that failed part-way still contributes the entries it had already "
-            "parsed, so a hit's list_source may name a list missing from here; that is "
-            "a real match on a list this server does not consider fully screened, not a "
-            "contradiction."
+            "Which consolidated lists were screened for this call: each from its latest "
+            "successful load, which may be a previous load if the latest refresh of that "
+            "list failed (see lists_stale). A list absent here was NOT screened — see "
+            "lists_unavailable. A list that fails part-way through a load contributes "
+            "none of that load's entries."
         ),
     )
     lists_unavailable: list[str] = Field(
         default_factory=list,
         description=(
-            "Expected lists that did not load, or loaded to zero records, and so were "
-            "NOT screened. Non-empty means this screen is incomplete: a name on one of "
-            "these lists would not appear in hits. Absence of evidence here is not "
-            "evidence of absence."
+            "Expected lists that have no usable load — never loaded, loaded to zero "
+            "records, or last loaded more than 7 days ago — and so were NOT screened. "
+            "Non-empty means this screen is incomplete: a name on one of these lists "
+            "would not appear in hits. Absence of evidence here is not evidence of "
+            "absence."
+        ),
+    )
+    lists_stale: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Screened lists served from a previous load because the latest refresh of "
+            "that list failed (kept for up to 7 days after its last successful load). "
+            "Their entries were screened, but designations made since list_as_at for "
+            "that list would not appear in hits."
+        ),
+    )
+    list_as_at: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Each screened list's own last successful load time on this server (ISO "
+            "8601 UTC), keyed by list name."
         ),
     )
     is_partial: bool = Field(
         False,
         description=(
-            "True when any expected list was unavailable, or when the lists are a "
-            "previous load that could not be refreshed (see as_at). When true, an "
-            "empty hits list must be treated as UNRESOLVED, not as clearance."
+            "True when any expected list was unavailable or stale, or any screened list "
+            "was loaded 24 hours ago or more (see list_as_at). When true, an empty hits "
+            "list must be treated as UNRESOLVED, not as clearance."
         ),
     )
     as_at: str | None = Field(
         None,
         description=(
-            "When this server last refreshed the loaded lists (ISO timestamp). "
-            "Provenance for the screen — the lists update on designation."
+            "The oldest load time among the screened lists (ISO 8601 UTC; see "
+            "list_as_at), or null when no list was screened. Provenance for the "
+            "screen — the lists update on designation."
         ),
     )
     hits: list[SanctionsHit] = Field(
