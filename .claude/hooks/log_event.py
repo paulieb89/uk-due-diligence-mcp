@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Append one JSONL line per hook event. Never blocks, never fails loudly."""
-import json, os, sys
+import json
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
