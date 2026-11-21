@@ -2,7 +2,7 @@
 
 All notable changes to `uk-due-diligence-mcp` are documented here, starting with 1.7.0. Earlier releases are described in their GitHub release notes.
 
-## [Unreleased]
+## [1.8.0] — 2026-11-21
 
 ### Added
 
@@ -11,6 +11,7 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 ### Fixed
 
 - `gazette_insolvency` is explicitly corporate-only: the `name`, `query` and `entity_name` descriptions no longer claim individual search, the tool description states that personal insolvency is not covered and notes that the Individual Insolvency Register covers England and Wales only (Scotland and Northern Ireland have separate registers), and new `skipped_unrecognised` and `unrecognised_codes` fields report feed entries with codes outside the corporate taxonomy (#69).
+- `sanctions_screen` treats an underscore as a word separator, so `Begemot_Sun` and `Begemot Sun` match each other on every list (#29).
 - `charity_search` percent-encodes the query as one path segment, so `/`, `?`, `#` and `%` are searched for instead of changing the request URL (#70).
 - The sanctions startup cache warm keeps a reference to its task, so it can no longer be garbage-collected mid-flight (#67).
 - A failed charges check inside `company_profile` no longer logs the company number.
