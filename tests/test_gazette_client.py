@@ -46,6 +46,7 @@ class _Stub:
                     "path": parsed.path,
                     "query": {k: v[0] for k, v in parse_qs(parsed.query).items()},
                     "accept": self.headers.get("Accept"),
+                    "user_agent": self.headers.get("User-Agent"),
                 }
                 stub.seen.append(req)
                 code, body, ctype, *rest = stub.respond(req)
@@ -124,6 +125,21 @@ async def test_client_sends_accept_and_params_and_returns_json(stub):
     [req] = stub.seen
     assert req["query"] == {"text": "TESCO PLC", "results-page-size": "100"}
     assert req["accept"] == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_client_sends_project_user_agent_alongside_caller_headers(stub):
+    # Gazette fair-use policy: identify the client (#86). The caller's Accept
+    # must survive the merge, and urllib's default "Python-urllib/x" must not.
+    async with _GazetteClient() as client:
+        await client.request(
+            "GET", f"{stub.base}/insolvency/notice/data.json",
+            headers={"Accept": "application/json"},
+        )
+        await client.request("GET", f"{stub.base}/notice/1/data.json")
+
+    assert [r["user_agent"] for r in stub.seen] == [http_client.USER_AGENT] * 2
+    assert stub.seen[0]["accept"] == "application/json"
 
 
 @pytest.mark.asyncio

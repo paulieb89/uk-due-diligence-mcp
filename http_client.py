@@ -14,15 +14,44 @@ import http.client
 import math
 import os
 import time
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from pathlib import Path
 from typing import Any, Optional
 
 import httpx
 
 from mcpfleet_obs import raise_http_tool_error, raise_tool_error
+
+PACKAGE_NAME = "uk-due-diligence-mcp"
+
+
+def project_version() -> str:
+    """The app version: installed distribution metadata, else pyproject.toml.
+
+    The metadata is authoritative; a bare checkout that was never installed
+    falls back to pyproject.toml, which holds the same number.
+    """
+    try:
+        return _pkg_version(PACKAGE_NAME)
+    except PackageNotFoundError:
+        pyproject = Path(__file__).with_name("pyproject.toml")
+        return tomllib.loads(pyproject.read_text())["project"]["version"]
+
+
+# Sent on every upstream request (#86). The Gazette's fair-use policy asks
+# automated clients to identify themselves; the contact is the public maintainer
+# address from the README. Measured 2026-11-21 from Fly: the Gazette returns 200
+# to urllib with this header (as with urllib's default) and 403 to httpx with or
+# without it, so the header does not change the urllib-only Gazette path.
+USER_AGENT = (
+    f"{PACKAGE_NAME}/{project_version()} "
+    "(+https://github.com/paulieb89/uk-due-diligence-mcp; paul@bouch.dev)"
+)
 
 # ---------------------------------------------------------------------------
 # Base URLs
@@ -166,7 +195,7 @@ def companies_house_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         base_url=CH_BASE,
         auth=(api_key, ""),          # CH uses HTTP Basic, key as username
-        headers={"Accept": "application/json"},
+        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
         timeout=15.0,
     )
 
@@ -178,6 +207,7 @@ def charity_client() -> httpx.AsyncClient:
         headers={
             "Accept": "application/json",
             "Ocp-Apim-Subscription-Key": api_key,
+            "User-Agent": USER_AGENT,
         },
         timeout=15.0,
     )
@@ -288,9 +318,8 @@ class _GazetteClient:
             )
 
         await _gazette_pace()
-        resp = await asyncio.to_thread(
-            _urllib_get, url, kwargs.get("params"), kwargs.get("headers")
-        )
+        headers = {"User-Agent": USER_AGENT, **(kwargs.get("headers") or {})}
+        resp = await asyncio.to_thread(_urllib_get, url, kwargs.get("params"), headers)
         if resp.status_code == 429:
             _gazette_blocked_until = time.monotonic() + _gazette_retry_after(resp.headers)
         return resp
@@ -307,7 +336,7 @@ def gazette_client() -> _GazetteClient:
 
 def land_registry_client() -> httpx.AsyncClient:
     """HMLR Land Registry linked-data endpoints — no auth required, read-only."""
-    return httpx.AsyncClient(timeout=20.0)
+    return httpx.AsyncClient(timeout=20.0, headers={"User-Agent": USER_AGENT})
 
 
 def sanctions_client() -> httpx.AsyncClient:
@@ -320,7 +349,7 @@ def sanctions_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(120.0, connect=15.0),
         follow_redirects=True,
-        headers={"User-Agent": "uk-due-diligence-mcp/sanctions (paul@bouch.dev)"},
+        headers={"User-Agent": USER_AGENT},
     )
 
 
