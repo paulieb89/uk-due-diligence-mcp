@@ -87,12 +87,14 @@ def _log(msg: str) -> None:
 # Normalisation + small helpers
 # ---------------------------------------------------------------------------
 
-_PUNCT_RE = re.compile(r"[^\w\s]", re.UNICODE)
+# `\w` includes `_`, so it is added explicitly: an underscore separates words like
+# any other punctuation ("Jal_Vahini" and "Jal Vahini" must share an index key).
+_PUNCT_RE = re.compile(r"[^\w\s]|_", re.UNICODE)
 _WS_RE = re.compile(r"\s+")
 
 
 def normalize(name: str | None) -> str:
-    """Upper-case, strip diacritics + punctuation, collapse whitespace."""
+    """Upper-case, strip diacritics + punctuation (underscore included), collapse whitespace."""
     if not name:
         return ""
     s = unicodedata.normalize("NFKD", name)
