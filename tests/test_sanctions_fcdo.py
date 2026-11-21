@@ -370,3 +370,13 @@ def test_real_fcdo_file_loads_every_designation_and_name_without_loss(monkeypatc
     }
     for kind, refs in per_type.items():
         assert refs == {ref for ref, k in expected_types.items() if k == kind}, kind
+
+
+@pytest.mark.parametrize("query", ["JAL VAHINI TEST", "Jal_Vahini Test", "jal vahini test"])
+def test_underscore_and_space_alias_spellings_screen_to_each_other(query):
+    """Underscore is a separator (#29): either spelling returns both listed spellings."""
+    hits = sanctions._screen(_fixture_index(), query, None)
+    assert [(h.reference, h.matched_name, h.is_alias) for h in hits] == [
+        ("SYN0003", "JAL VAHINI TEST", True),
+        ("SYN0003", "Jal_Vahini Test", True),
+    ]

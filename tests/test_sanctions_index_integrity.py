@@ -255,3 +255,160 @@ async def test_failed_build_is_not_retried_until_the_cooldown_expires(monkeypatc
     with pytest.raises(ToolError):
         await sanctions.get_index()
     assert attempts["n"] == 1, "second call inside the cooldown must not re-download"
+
+
+# ---------------------------------------------------------------------------
+# normalize(): underscore is a separator (#29)
+# ---------------------------------------------------------------------------
+
+
+def test_underscore_normalizes_like_a_space():
+    assert sanctions.normalize("Jal_Vahini") == sanctions.normalize("Jal Vahini") == "JAL VAHINI"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("A__B", "A B"),
+        ("_Leading and trailing_", "LEADING AND TRAILING"),
+        ("Société Générale", "SOCIETE GENERALE"),
+        ("Ñandú Müller", "NANDU MULLER"),
+        ("O'Brien & Co., Ltd.", "O BRIEN CO LTD"),
+        ("Al-Qaida / AQ", "AL QAIDA AQ"),
+        ("  Acme \t Trading\n Ltd  ", "ACME TRADING LTD"),
+        ("Петров 123", "ПЕТРОВ 123"),
+        ("PETREL TEST 8", "PETREL TEST 8"),
+        ("", ""),
+        (None, ""),
+        ("___", ""),
+        ("_ - _", ""),
+    ],
+)
+def test_normalize_cases(raw, expected):
+    assert sanctions.normalize(raw) == expected
+
+
+def test_underscore_only_query_has_no_hits():
+    index = {sanctions.normalize("ACME TRADING LTD"): [_record("OFAC (US)")]}
+    assert sanctions._screen(index, "___", None) == []
+
+
+@pytest.mark.asyncio
+async def test_underscore_only_record_is_not_indexed(monkeypatch):
+    _use_sources(
+        monkeypatch,
+        ("OFAC (US)", "u1", lambda _p: iter([_record("OFAC (US)", "___"), _record("OFAC (US)")])),
+    )
+    monkeypatch.setattr(sanctions, "_download_to_temp", _download_ok)
+
+    index, ok = await sanctions._build_index()
+
+    assert ok == ["OFAC (US)"]
+    assert "" not in index
+    assert list(index) == ["ACME TRADING LTD"]
+
+
+# Minimal, structurally valid XML for each real parser. Synthetic names only.
+
+def _ofac_xml(primary: str, alias: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<sdnList xmlns="http://tempuri.org/sdnList.xsd">'
+        "<sdnEntry><uid>9001</uid>"
+        f"<lastName>{primary}</lastName><sdnType>Entity</sdnType>"
+        "<programList><program>SYNTHETIC</program></programList>"
+        f"<akaList><aka><uid>9002</uid><type>a.k.a.</type><lastName>{alias}</lastName></aka></akaList>"
+        "</sdnEntry></sdnList>"
+    )
+
+
+def _eu_xml(primary: str, alias: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<export xmlns="http://eu.europa.ec/fpi/fsd/export">'
+        '<sanctionEntity euReferenceNumber="EU.9001.01" logicalId="9001">'
+        '<regulation programme="SYN" publicationDate="2022-03-01"/>'
+        '<subjectType code="enterprise"/>'
+        f'<nameAlias wholeName="{primary}"/>'
+        f'<nameAlias wholeName="{alias}"/>'
+        "</sanctionEntity></export>"
+    )
+
+
+def _un_xml(primary: str, alias: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        "<CONSOLIDATED_LIST><INDIVIDUALS/><ENTITIES><ENTITY>"
+        "<DATAID>9001</DATAID><FIRST_NAME>" + primary + "</FIRST_NAME>"
+        "<UN_LIST_TYPE>Synthetic</UN_LIST_TYPE><REFERENCE_NUMBER>SYe.001</REFERENCE_NUMBER>"
+        "<LISTED_ON>2022-03-01</LISTED_ON>"
+        "<ENTITY_ALIAS><QUALITY>Good</QUALITY><ALIAS_NAME>" + alias + "</ALIAS_NAME></ENTITY_ALIAS>"
+        "</ENTITY></ENTITIES></CONSOLIDATED_LIST>"
+    )
+
+
+def _fcdo_xml(primary: str, alias: str) -> str:
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        "<Designations><DateGenerated>27/10/2026</DateGenerated><Designation>"
+        "<DateDesignated>01/03/2022</DateDesignated><UniqueID>SYN9001</UniqueID><Names>"
+        f"<Name><Name6>{primary}</Name6><NameType>Primary Name</NameType></Name>"
+        f"<Name><Name6>{alias}</Name6><NameType>Alias</NameType></Name>"
+        "</Names><RegimeName>Synthetic Regime</RegimeName>"
+        "<IndividualEntityShip>Entity</IndividualEntityShip>"
+        "</Designation></Designations>"
+    )
+
+
+_REAL_PARSERS = {
+    "OFSI (UK)": (sanctions._parse_fcdo, _fcdo_xml),
+    "OFAC (US)": (sanctions._parse_ofac, _ofac_xml),
+    "EU": (sanctions._parse_eu, _eu_xml),
+    "UN": (sanctions._parse_un, _un_xml),
+}
+
+_UNDERSCORED = "Jal_Vahini Shipping"
+_SPACED = "Jal Vahini Shipping"
+_OTHER = "UNRELATED HOLDINGS"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", ["primary", "alias"])
+@pytest.mark.parametrize(
+    ("listed", "query"),
+    [(_UNDERSCORED, _SPACED), (_SPACED, _UNDERSCORED)],
+    ids=["underscore-record", "space-record"],
+)
+@pytest.mark.parametrize("source", list(_REAL_PARSERS))
+async def test_underscore_and_space_spellings_match_on_every_list(
+    monkeypatch, tmp_path, mcp_client, source, listed, query, position
+):
+    """Both sides go through normalize(), so either spelling finds the other.
+
+    Exercises each real parser end to end through _build_index and the tool, so a
+    parser that indexed a raw or differently-normalised key would fail here.
+    """
+    parser, make_xml = _REAL_PARSERS[source]
+    primary, alias = (listed, _OTHER) if position == "primary" else (_OTHER, listed)
+    _use_sources(monkeypatch, (source, "u1", parser))
+    monkeypatch.setattr(sanctions, "FCDO_MIN_DESIGNATIONS", 1)
+    monkeypatch.setattr(sanctions, "_FCDO_LAST_DESIGNATIONS", None)
+
+    async def download(_url):
+        # _build_index unlinks the path, so write a fresh file per download.
+        path = tmp_path / f"{source.split()[0].lower()}.xml"
+        path.write_text(make_xml(primary, alias), encoding="utf-8")
+        return str(path)
+
+    monkeypatch.setattr(sanctions, "_download_to_temp", download)
+
+    result = await mcp_client.call_tool("sanctions_screen", {"name": query})
+    data = result.structured_content
+
+    assert data["lists_screened"] == [source]
+    assert data["normalized_query"] == "JAL VAHINI SHIPPING"
+    assert data["match_count"] == 1
+    hit = data["hits"][0]
+    assert hit["list_source"] == source
+    assert hit["matched_name"] == listed, "hit must carry the listed spelling, not the query"
+    assert hit["is_alias"] is (position == "alias")
