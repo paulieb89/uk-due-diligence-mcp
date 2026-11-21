@@ -1235,10 +1235,10 @@ class GazetteInsolvencyResult(BaseModel):
     is_partial: bool = Field(
         True,
         description=(
-            "True when upstream_total exceeds the feed entries read on this page, or "
-            "when upstream_total is unknown. It compares the page with the whole feed "
-            "only: notices dropped by notice_type or max_notices do not set it. On page "
-            "2 or later it can stay true on the last page. Re-call with page+1 to read on."
+            "True when matches remain after this page (upstream_total exceeds the feed "
+            "entries on this and earlier pages), or when upstream_total is unknown. "
+            "Notices dropped by notice_type or max_notices do not set it. Re-call with "
+            "page+1 to read on."
         ),
     )
     notices: list[GazetteNotice] = Field(

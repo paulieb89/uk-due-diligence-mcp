@@ -132,6 +132,10 @@ def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return notices
 
 
+# The Notice Feed caps results-page-size at 100.
+FEED_PAGE_SIZE = 100
+
+
 def _feed_entries(raw: Any) -> list[dict[str, Any]]:
     """Return the feed's entries as a list (the feed sends a lone entry as a dict)."""
     entries = raw.get("entry", []) if isinstance(raw, dict) else []
@@ -246,12 +250,11 @@ def register_tools(mcp: FastMCP) -> None:
         One call reads one page of at most 100 feed entries (page, 1-based);
         it never fetches further pages. upstream_total is the feed's count of
         matching corporate notices (null when the feed does not say), and
-        is_partial is true when that count exceeds the entries read on this
-        page, or when the count is unknown. The severity sort and max_notices
-        cap apply within the page, so the most severe notices shown are the
-        most severe on this page, not across every match. On page 2 or later
-        is_partial can stay true on the last page, because it compares the
-        total with the entries read in this call.
+        is_partial is true when matches remain after this page (the count
+        exceeds the entries on this and earlier pages), or when the count is
+        unknown. The severity sort and max_notices cap apply within the page,
+        so the most severe notices shown are the most severe on this page,
+        not across every match.
 
         Each result includes a notice_numeric_id. Read the full legal wording
         via the notice://{notice_numeric_id} resource.
@@ -274,7 +277,7 @@ def register_tools(mcp: FastMCP) -> None:
             # Corporate insolvency only, so f:total counts notices this tool
             # can return (category 25, personal insolvency, is excluded).
             "categorycode": 24,
-            "results-page-size": 100,
+            "results-page-size": FEED_PAGE_SIZE,
             "results-page": page,
         }
         if start_date:
@@ -294,7 +297,7 @@ def register_tools(mcp: FastMCP) -> None:
                 raw = _json_or_error(resp)
                 entries = _feed_entries(raw)
                 # Count raw feed entries before the code, notice_type and
-                # max_notices filters: is_partial is about the page vs the feed.
+                # max_notices filters: is_partial is about the feed, not the filters.
                 entries_fetched = len(entries)
                 upstream_total = _feed_total(raw)
                 all_notices = _extract_notices(entries)
@@ -338,8 +341,12 @@ def register_tools(mcp: FastMCP) -> None:
             max_notices_cap=max_notices,
             upstream_total=upstream_total,
             page=page,
-            # Unknown total is conservatively partial: never claim completeness.
-            is_partial=upstream_total is None or upstream_total > entries_fetched,
+            # Partial while matches remain after this page; an unknown total is
+            # conservatively partial, never claimed complete.
+            is_partial=(
+                upstream_total is None
+                or upstream_total > (page - 1) * FEED_PAGE_SIZE + entries_fetched
+            ),
             notices=notice_models,
         )
 
