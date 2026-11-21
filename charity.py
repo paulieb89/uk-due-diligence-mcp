@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 from typing import Annotated, Any
+from urllib.parse import quote
 
 from pydantic import Field
 from fastmcp import FastMCP
@@ -30,6 +31,18 @@ from models import (
 # ---------------------------------------------------------------------------
 
 _STATUS_LABELS = {"R": "Registered", "RM": "Removed"}
+
+
+def _encode_path_segment(value: str) -> str:
+    """Percent-encode ``value`` as a single URL path segment.
+
+    ``quote`` leaves ``.`` unescaped, and a segment of exactly ``.`` or
+    ``..`` would be normalised away as a dot segment, so those are encoded
+    explicitly.
+    """
+    if value in (".", ".."):
+        return "%2E" * len(value)
+    return quote(value, safe="")
 
 
 def _coerce_number(value: Any) -> float | None:
@@ -115,7 +128,7 @@ async def _search_charities(query: str, offset: int, limit: int) -> CharitySearc
         try:
             resp = await _request_with_retry(
                 client, "GET",
-                f"/searchCharityName/{query}",
+                f"/searchCharityName/{_encode_path_segment(query)}",
             )
             data = _json_or_error(resp)
         except ToolError as exc:

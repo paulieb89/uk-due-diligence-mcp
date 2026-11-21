@@ -84,3 +84,69 @@ async def test_non_not_found_error_still_propagates(monkeypatch):
 
     with pytest.raises(ToolError):
         await charity._search_charities("Oxfam", 0, 20)
+
+
+def _capture_raw_path(monkeypatch) -> list[bytes]:
+    seen: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.raw_path)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(charity, "charity_client", _mock_client_factory(handler))
+    return seen
+
+
+_PREFIX = b"/register/api/searchCharityName/"
+
+
+@pytest.mark.asyncio
+async def test_query_with_url_delimiters_is_one_encoded_segment(monkeypatch):
+    """'/', '?', '#' and '%' in the query must be searched for, not alter the
+    request URL."""
+    seen = _capture_raw_path(monkeypatch)
+    query = "a/b?c=1#d%e"
+
+    result = await charity._search_charities(query, 0, 20)
+
+    assert seen == [_PREFIX + b"a%2Fb%3Fc%3D1%23d%25e"]
+    assert result.query == query
+    assert result.total == 0
+
+
+@pytest.mark.asyncio
+async def test_no_query_string_or_fragment_introduced(monkeypatch):
+    urls: list[httpx.URL] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        urls.append(request.url)
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(charity, "charity_client", _mock_client_factory(handler))
+
+    await charity._search_charities("x?y=1#frag", 0, 20)
+
+    assert urls[0].query == b""
+    assert urls[0].fragment == ""
+    assert urls[0].raw_path == _PREFIX + b"x%3Fy%3D1%23frag"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("Oxfam", b"Oxfam"),
+        ("British Red Cross", b"British%20Red%20Cross"),
+        ("Café Ünïcode", b"Caf%C3%A9%20%C3%9Cn%C3%AFcode"),
+        ("%2F", b"%252F"),
+        ("..", b"%2E%2E"),
+        (".", b"%2E"),
+    ],
+)
+async def test_query_encoding_cases(monkeypatch, query, expected):
+    seen = _capture_raw_path(monkeypatch)
+
+    result = await charity._search_charities(query, 0, 20)
+
+    assert seen == [_PREFIX + expected]
+    assert result.query == query
