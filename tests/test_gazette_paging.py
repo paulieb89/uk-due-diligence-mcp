@@ -125,6 +125,25 @@ async def test_null_or_malformed_total_is_none_never_zero(monkeypatch, mcp_clien
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "total",
+    ["\u00b2", "\u0661\u0662", "9" * 5000],
+    ids=["superscript-two", "arabic-indic", "5000-digits"],
+)
+async def test_unconvertible_digit_total_keeps_notices(monkeypatch, mcp_client, total):
+    # "²" and Arabic-Indic digits pass str.isdigit() but are not ASCII; a
+    # 5,000-digit string exceeds Python's int-string conversion limit. Each
+    # must give an unknown total, not an error that loses the page.
+    _use_feed(monkeypatch, {"f:total": total, "entry": [_entry(i) for i in range(3)]})
+
+    data = await _call(mcp_client)
+
+    assert data["upstream_total"] is None
+    assert data["is_partial"] is True
+    assert len(data["notices"]) == 3
+
+
+@pytest.mark.asyncio
 async def test_numeric_string_total_is_parsed(monkeypatch, mcp_client):
     _use_feed(monkeypatch, {"f:total": "198", "entry": [_entry(i) for i in range(100)]})
 

@@ -156,8 +156,14 @@ def _feed_total(raw: Any) -> int | None:
         return value if value >= 0 else None
     if isinstance(value, str):
         text = value.strip()
-        if text.isdigit():
-            return int(text)
+        # ASCII digits only: str.isdigit() also accepts e.g. "²", which int()
+        # rejects. Any conversion failure (including Python's int-string
+        # length limit) means an unknown total, never a lost page.
+        if text and text.isascii() and text.isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
     return None
 
 
@@ -228,7 +234,7 @@ def register_tools(mcp: FastMCP) -> None:
         notice_type: Annotated[str | None, Field(description="Filter by Gazette notice code (e.g. '2450' petition to wind up a company, '2452' winding-up order, '2410' appointment of administrators). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
-        max_notices: Annotated[int, Field(description="Cap on notices returned from this page, applied after the severity/date sort. Default 20. One call reads one page of at most 100 feed entries, so 100 returns everything on the page, not every match: compare upstream_total and use page to read further.", ge=1, le=100)] = 20,
+        max_notices: Annotated[int, Field(description="Cap on notices returned from this page, applied after the severity/date sort. Default 20. One call reads one page of at most 100 feed entries, so 100 removes the cap for that page (notice_type and code filters still apply); it does not reach every match: compare upstream_total and use page to read further.", ge=1, le=100)] = 20,
         page: Annotated[int, Field(description="1-based page of the Gazette feed to read (100 entries per page). Default 1. Use with upstream_total to read past the first 100 matches.", ge=1)] = 1,
     ) -> GazetteInsolvencyResult:
         """Search The Gazette's insolvency notice index by entity name.
