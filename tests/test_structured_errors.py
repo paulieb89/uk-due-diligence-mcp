@@ -176,6 +176,56 @@ def test_links_past_the_bound_are_not_inspected():
     assert payload.error_category == "transient"
 
 
+# --- classifier: category order across a mixed chain -----------------------
+
+def test_inner_pydantic_error_beats_an_outer_httpx_error():
+    request = httpx.Request("GET", "https://x/y")
+    outer = _chained(httpx.ReadTimeout("slow", request=request), _pydantic_error())
+    payload, _ = _classify(outer)
+    assert payload.error_category == "validation"
+    assert payload.is_retryable is False
+
+
+def test_inner_not_found_beats_an_outer_json_decode_error():
+    try:
+        json.loads("<html>")
+    except json.JSONDecodeError as exc:
+        outer = _chained(exc, NotFoundError("Unknown tool: 'nope'"))
+    payload, _ = _classify(outer)
+    assert payload.error_category == "not_found"
+    assert payload.is_retryable is False
+
+
+def test_inner_parse_error_beats_an_outer_httpx_error():
+    request = httpx.Request("GET", "https://x/y")
+    response = httpx.Response(404, request=request)
+    outer = _chained(
+        httpx.HTTPStatusError("not found", request=request, response=response),
+        ET.ParseError("bad xml"),
+    )
+    payload, _ = _classify(outer)
+    assert payload.error_category == "transient"
+    assert "ParseError" in payload.description
+
+
+def test_inner_pydantic_error_beats_outer_not_found_and_parse_errors():
+    inner = _chained(ET.ParseError("bad xml"), _pydantic_error())
+    outer = _chained(NotFoundError("Unknown tool: 'nope'"), inner)
+    payload, _ = _classify(outer)
+    assert payload.error_category == "validation"
+
+
+def test_category_order_respects_the_chain_bound():
+    request = httpx.Request("GET", "https://x/y")
+    deepest: BaseException = _pydantic_error()
+    for i in range(structured_errors.MAX_CHAIN - 1):
+        deepest = _chained(RuntimeError(f"wrap {i}"), deepest)
+    outer = _chained(httpx.ReadTimeout("slow", request=request), deepest)
+    # The pydantic error is link MAX_CHAIN + 1, out of reach: the timeout wins.
+    payload, _ = _classify(outer)
+    assert payload.error_category == "transient"
+
+
 # --- middleware ---------------------------------------------------------------
 
 class _Message:

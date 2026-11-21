@@ -38,6 +38,13 @@ def _chain(exc: BaseException) -> list[BaseException]:
     return chain
 
 
+def _first(
+    chain: list[BaseException], types: type[BaseException] | tuple[type[BaseException], ...]
+) -> BaseException | None:
+    """The outermost link in chain that is an instance of types, if any."""
+    return next((link for link in chain if isinstance(link, types)), None)
+
+
 def raise_structured_from_unhandled(exc: BaseException, *, attempted: str) -> NoReturn:
     """Re-raise an exception that escaped a tool as a structured fleet error.
 
@@ -57,34 +64,39 @@ def raise_structured_from_unhandled(exc: BaseException, *, attempted: str) -> No
     for link in chain:
         if parse_error_payload(str(link)) is not None:
             raise ToolError(str(link)) from exc
-    for link in chain:
-        if isinstance(link, PydanticValidationError):
-            raise_tool_error(
-                "validation",
-                is_retryable=False,
-                attempted=attempted,
-                description=f"Arguments rejected by the tool's input schema: {link}",
-            )
-        if isinstance(link, NotFoundError):
-            raise_tool_error(
-                "not_found",
-                is_retryable=False,
-                attempted=attempted,
-                description=f"{link} — check the name against the server's tool list.",
-            )
-        if isinstance(link, (json.JSONDecodeError, ET.ParseError)):
-            raise_tool_error(
-                "transient",
-                is_retryable=True,
-                attempted=attempted,
-                description=(
-                    f"Upstream returned a body that could not be parsed "
-                    f"({type(link).__name__}) — typically an error or maintenance page "
-                    "served with status 200. Retry shortly."
-                ),
-            )
-        if isinstance(link, httpx.HTTPError):
-            raise_http_tool_error(link, attempted=attempted)
+    # Each category in turn across the whole chain, so an inner link of a
+    # higher-precedence category beats an outer link of a lower one.
+    pyd = _first(chain, PydanticValidationError)
+    if pyd is not None:
+        raise_tool_error(
+            "validation",
+            is_retryable=False,
+            attempted=attempted,
+            description=f"Arguments rejected by the tool's input schema: {pyd}",
+        )
+    not_found = _first(chain, NotFoundError)
+    if not_found is not None:
+        raise_tool_error(
+            "not_found",
+            is_retryable=False,
+            attempted=attempted,
+            description=f"{not_found} — check the name against the server's tool list.",
+        )
+    unparseable = _first(chain, (json.JSONDecodeError, ET.ParseError))
+    if unparseable is not None:
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"Upstream returned a body that could not be parsed "
+                f"({type(unparseable).__name__}) — typically an error or maintenance page "
+                "served with status 200. Retry shortly."
+            ),
+        )
+    http_error = _first(chain, httpx.HTTPError)
+    if http_error is not None:
+        raise_http_tool_error(http_error, attempted=attempted)
     raise_tool_error(
         "unknown",
         is_retryable=False,
