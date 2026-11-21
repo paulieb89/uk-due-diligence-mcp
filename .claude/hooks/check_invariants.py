@@ -68,36 +68,51 @@ def check_version_triad() -> list[str]:
     The v1.3.0 release commit (8dd311f) touched pyproject.toml and server.py
     and never server.json, exactly as daaa9dc had already had to fix once.
     """
-    try:
-        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
-        declared = pyproject["project"]["version"]
-    except (OSError, KeyError, tomllib.TOMLDecodeError):
-        return []
+    # A file that cannot be READ fails open, like the rest of this script. A file
+    # that is read but whose version cannot be PARSED is reported: dropping it
+    # silently let `"version" : "9.9.9"` pass while `"version": "9.9.9"` failed
+    # (#63). ValueError covers TOMLDecodeError, JSONDecodeError and the plain
+    # ValueError tomllib raises for an oversized integer.
+    found: dict[str, str] = {}
+    unparsed: list[str] = []
 
-    found: dict[str, str] = {"pyproject.toml": declared}
+    pyproject_raw = _read("pyproject.toml")
+    if pyproject_raw is not None:
+        try:
+            found["pyproject.toml"] = str(tomllib.loads(pyproject_raw)["project"]["version"])
+        except (ValueError, KeyError, TypeError):
+            unparsed.append("pyproject.toml ([project].version)")
 
     server_py = _read("server.py")
-    if server_py:
-        m = re.search(r'"version":\s*"([0-9]+\.[0-9]+\.[0-9]+)"', server_py)
+    if server_py is not None:
+        m = re.search(r'"version"\s*:\s*"([0-9]+\.[0-9]+\.[0-9]+)"', server_py)
         if m:
             found["server.py (server card)"] = m.group(1)
+        else:
+            unparsed.append("server.py (server card)")
 
     server_json_raw = _read("server.json")
-    if server_json_raw:
+    if server_json_raw is not None:
         try:
             sj = json.loads(server_json_raw)
-            if "version" in sj:
-                found["server.json (top level)"] = sj["version"]
-            for pkg in sj.get("packages") or []:
-                if "version" in pkg:
-                    found["server.json (packages[])"] = pkg["version"]
-        except ValueError:
-            pass
+            found["server.json (top level)"] = str(sj["version"])
+            packages = sj.get("packages") or []
+            if not packages:
+                unparsed.append("server.json (packages[])")
+            for i, pkg in enumerate(packages):
+                found[f"server.json (packages[{i}])"] = str(pkg["version"])
+        except (ValueError, KeyError, TypeError, AttributeError):
+            unparsed.append("server.json (top level or packages[])")
+
+    problems = [
+        "VERSION TRIAD UNPARSEABLE — file exists but its version could not be read:\n"
+        + "\n".join(f"    {name}" for name in unparsed)
+    ] if unparsed else []
 
     if len(set(found.values())) <= 1:
-        return []
+        return problems
     lines = [f"    {name:28} {value}" for name, value in found.items()]
-    return [
+    return problems + [
         "VERSION TRIAD DRIFT — these must all match:\n"
         + "\n".join(lines)
         + "\n    A release is not done until all four agree. See CLAUDE.md > Releasing."
