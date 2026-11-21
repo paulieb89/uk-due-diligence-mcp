@@ -132,6 +132,41 @@ def _extract_notices(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return notices
 
 
+def _feed_entries(raw: Any) -> list[dict[str, Any]]:
+    """Return the feed's entries as a list (the feed sends a lone entry as a dict)."""
+    entries = raw.get("entry", []) if isinstance(raw, dict) else []
+    if isinstance(entries, dict):
+        return [entries]
+    if not isinstance(entries, list):
+        return []
+    return [e for e in entries if isinstance(e, dict)]
+
+
+def _feed_total(raw: Any) -> int | None:
+    """Parse the feed's top-level f:total as a non-negative int.
+
+    Absent, null or malformed is None (unknown), never 0. A genuine 0 stays 0.
+    """
+    if not isinstance(raw, dict):
+        return None
+    value = raw.get("f:total")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        # ASCII digits only: str.isdigit() also accepts e.g. "²", which int()
+        # rejects. Any conversion failure (including Python's int-string
+        # length limit) means an unknown total, never a lost page.
+        if text and text.isascii() and text.isdigit():
+            try:
+                return int(text)
+            except ValueError:
+                return None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Shared fetch helper
 # ---------------------------------------------------------------------------
@@ -199,13 +234,24 @@ def register_tools(mcp: FastMCP) -> None:
         notice_type: Annotated[str | None, Field(description="Filter by Gazette notice code (e.g. '2450' petition to wind up a company, '2452' winding-up order, '2410' appointment of administrators). Omit to search all.")] = None,
         start_date: Annotated[str | None, Field(description="Filter notices from this date (YYYY-MM-DD)")] = None,
         end_date: Annotated[str | None, Field(description="Filter notices up to this date (YYYY-MM-DD)")] = None,
-        max_notices: Annotated[int, Field(description="Cap on notices returned, applied after severity/date sort. Default 20. The Gazette insolvency feed returns up to 100 results per search — raise to 100 to see the full set.", ge=1, le=100)] = 20,
+        max_notices: Annotated[int, Field(description="Cap on notices returned from this page, applied after the severity/date sort. Default 20. One call reads one page of at most 100 feed entries, so 100 removes the cap for that page (notice_type and code filters still apply); it does not reach every match: compare upstream_total and use page to read further.", ge=1, le=100)] = 20,
+        page: Annotated[int, Field(description="1-based page of the Gazette feed to read (100 entries per page). Default 1. Use with upstream_total to read past the first 100 matches.", ge=1)] = 1,
     ) -> GazetteInsolvencyResult:
         """Search The Gazette's insolvency notice index by entity name.
 
         Searches The Gazette's corporate-insolvency notice index using the
         authoritative Gazette notice-code taxonomy. Results are sorted by an
         internal DD severity score; the notice label itself remains a source fact.
+
+        One call reads one page of at most 100 feed entries (page, 1-based);
+        it never fetches further pages. upstream_total is the feed's count of
+        matching corporate notices (null when the feed does not say), and
+        is_partial is true when that count exceeds the entries read on this
+        page, or when the count is unknown. The severity sort and max_notices
+        cap apply within the page, so the most severe notices shown are the
+        most severe on this page, not across every match. On page 2 or later
+        is_partial can stay true on the last page, because it compares the
+        total with the entries read in this call.
 
         Each result includes a notice_numeric_id. Read the full legal wording
         via the notice://{notice_numeric_id} resource.
@@ -222,8 +268,14 @@ def register_tools(mcp: FastMCP) -> None:
                 description="Provide 'name' (or 'query') — the company or individual name to search for.",
             )
         qs: dict[str, Any] = {
+            # `text` is not in the Notice Feed parameter table, but it works
+            # in production; keep it as is.
             "text": entity_name,
+            # Corporate insolvency only, so f:total counts notices this tool
+            # can return (category 25, personal insolvency, is excluded).
+            "categorycode": 24,
             "results-page-size": 100,
+            "results-page": page,
         }
         if start_date:
             qs["start-publish-date"] = start_date
@@ -231,6 +283,8 @@ def register_tools(mcp: FastMCP) -> None:
             qs["end-publish-date"] = end_date
 
         all_notices: list[dict[str, Any]] = []
+        entries_fetched = 0
+        upstream_total: int | None = None
 
         async with gazette_client() as client:
             try:
@@ -238,9 +292,11 @@ def register_tools(mcp: FastMCP) -> None:
                     client, "GET", "/insolvency/notice/data.json", params=qs
                 )
                 raw = _json_or_error(resp)
-                entries = raw.get("entry", []) if isinstance(raw, dict) else []
-                if isinstance(entries, dict):
-                    entries = [entries]
+                entries = _feed_entries(raw)
+                # Count raw feed entries before the code, notice_type and
+                # max_notices filters: is_partial is about the page vs the feed.
+                entries_fetched = len(entries)
+                upstream_total = _feed_total(raw)
                 all_notices = _extract_notices(entries)
             except ToolError:
                 # Already a structured fleet error (e.g. persistent 429/503) —
@@ -280,6 +336,10 @@ def register_tools(mcp: FastMCP) -> None:
             end_date=end_date,
             total_notices=len(notice_models),
             max_notices_cap=max_notices,
+            upstream_total=upstream_total,
+            page=page,
+            # Unknown total is conservatively partial: never claim completeness.
+            is_partial=upstream_total is None or upstream_total > entries_fetched,
             notices=notice_models,
         )
 

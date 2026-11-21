@@ -4,6 +4,10 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 
 ## [Unreleased]
 
+### Added
+
+- `gazette_insolvency`: new `upstream_total` (the feed's match count, null when absent), `page` and `is_partial` fields, and a `page` parameter to read past the first 100 feed entries. Requests now ask only for corporate insolvency notices (#83).
+
 ### Fixed
 
 - `charity_search` percent-encodes the query as one path segment, so `/`, `?`, `#` and `%` are searched for instead of changing the request URL (#70).
