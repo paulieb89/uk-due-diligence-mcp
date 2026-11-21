@@ -224,12 +224,79 @@ def check_absolute_paths() -> list[str]:
     ]
 
 
+def _edit_in_repo(payload: object) -> bool:
+    """True only when the hook payload names a file inside ROOT.
+
+    The Write|Edit|MultiEdit matcher has no path predicate, so an edit in a
+    sibling repo fires this hook too. Without this guard it re-asserted *this*
+    repo's invariants and exited 0 — a green light from a repo the edit never
+    touched (measured 2026-09-09 against mcpfleet-obs).
+
+    Containment is component-aware on resolved paths, matching
+    post_edit_python.py: a string prefix would accept a sibling named
+    `<repo>-other`, and skipping resolve() would let `..` or a symlink escape.
+    Anything that cannot be interpreted fails open (False), like the rest of
+    this file.
+
+    Resolution is strict: Path.resolve() with strict=False does not raise on a
+    symlink loop on every Python (3.14 returns the unresolved path, which still
+    sits under ROOT), so a loop would wrongly count as "inside". Only the
+    deepest *existing* ancestor is resolved — strictly — and the not-yet-created
+    tail is appended, so a Write that creates new directories still counts.
+    """
+    if not isinstance(payload, dict):
+        return False
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    file_path = tool_input.get("file_path")
+    if not isinstance(file_path, str) or not file_path:
+        return False
+    try:
+        resolved = _resolve_strict_prefix(Path(file_path))
+        if resolved is None:
+            return False
+        resolved.relative_to(ROOT)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return True
+
+
+def _resolve_strict_prefix(path: Path) -> Path | None:
+    """Resolve `path` strictly, tolerating only a nonexistent trailing tail.
+
+    Returns None when the path cannot be resolved trustworthily: a dangling
+    symlink (its target could be anywhere) or a `..` inside the nonexistent
+    tail (it cannot be resolved without the components it climbs out of).
+    Any other resolution failure, including a symlink loop, raises OSError or
+    RuntimeError for the caller to treat as unresolvable.
+    """
+    current = path if path.is_absolute() else Path.cwd() / path
+    tail: list[str] = []
+    while True:
+        try:
+            base = current.resolve(strict=True)
+            break
+        except FileNotFoundError:
+            if current.is_symlink():
+                return None  # dangling symlink
+            parent = current.parent
+            if parent == current:
+                return None
+            tail.append(current.name)
+            current = parent
+    if ".." in tail:
+        return None
+    return base.joinpath(*reversed(tail))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Assert this repo's invariants.")
     # --standalone is load-bearing, not a convenience: as a hook this reads stdin
     # and fails open on anything unparseable, and CI supplies no payload at all —
     # so without the flag every CI run would exit 0 having checked nothing, which
-    # is worse than no gate. The PostToolUse path below is unchanged.
+    # is worse than no gate. The PostToolUse path reads the payload and skips the
+    # checks entirely when the edited file is not inside this repo (_edit_in_repo).
     parser.add_argument(
         "--standalone", action="store_true",
         help="run with no hook payload (CI, /verify)",
@@ -244,9 +311,11 @@ def main() -> int:
 
     if not args.standalone:
         try:
-            json.load(sys.stdin)
+            payload = json.load(sys.stdin)
         except Exception:
             return 0  # unparseable input: no opinion
+        if not _edit_in_repo(payload):
+            return 0  # edit outside this repo: not ours to judge
 
     problems: list[str] = []
     for check in (
