@@ -191,17 +191,21 @@ def _feed_total(raw: Any) -> int | None:
 # ---------------------------------------------------------------------------
 
 async def _fetch_gazette_notice(notice_id: str) -> dict:
-    # Same transport and error taxonomy as the insolvency search: urllib via
-    # gazette_client (httpx gets 403 from Fly), retries on 429/503, and
-    # structured ToolErrors. The Accept header matters: without it the notice
-    # endpoint answers 429 text/html.
-    async with gazette_client() as client:
-        resp = await _request_with_retry(
-            client, "GET", f"/notice/{notice_id.strip()}/data.json",
-            params={"view": "linked-data"},
-            headers={"Accept": "application/json"},
-        )
-    return _json_or_error(resp)
+    # Guarded until #98: sends no request. The notice data endpoint
+    # (GET /notice/{id}/data.json?view=linked-data) is disallowed by robots.txt
+    # and answers 429 with Retry-After: 900 on the first request, which paused
+    # every Gazette tool for 15 minutes (#107; docs/reference/gazette-api.md).
+    # Backs the gazette_notice tool, the notice:// resource and fetch("notice:...").
+    raise_tool_error(
+        "configuration",
+        is_retryable=False,
+        attempted=f"GET /notice/{notice_id.strip()}",
+        description=(
+            "The Gazette refuses this server's notice data endpoint, so full "
+            "notice text is unavailable until #98 lands. The notice's type, date "
+            "and URL from gazette_insolvency still stand."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

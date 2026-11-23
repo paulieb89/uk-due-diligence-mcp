@@ -1,16 +1,18 @@
 """
-Offline tests for the urllib-backed Gazette client and gazette_notice fetch.
+Offline tests for the urllib-backed Gazette client and the gazette_notice guard.
 
-thegazette.co.uk answers 403 to httpx from the Fly machine but 200 to urllib,
-and the notice endpoint needs `Accept: application/json` (without it: 429
-text/html). These tests run against a local HTTP stub, so they check what the
-client sends and how failures map to the fleet error taxonomy, without
-touching the real Gazette site.
+thegazette.co.uk answers 403 to httpx from the Fly machine but 200 to urllib.
+The notice data endpoint is robots-disallowed and answers 429 with
+Retry-After: 900, so gazette_notice sends nothing until #98 (#107). These tests
+run against a local HTTP stub, so they check what the client sends and how
+failures map to the fleet error taxonomy, without touching the real Gazette site.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import re
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -181,6 +183,32 @@ async def test_429_then_200_is_retried(stub, no_backoff):
     assert len(stub.seen) == 2
 
 
+PAUSE_RE = re.compile(
+    r"^Gazette requests paused by this server after an upstream 429; "
+    r"retry after (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) \((\d+)s\)\.$"
+)
+
+
+def _assert_local_pause(exc: ToolError, attempted: str) -> int:
+    """Assert a structured local-pause error and return its stated seconds."""
+    from datetime import datetime, timezone
+
+    payload = parse_error_payload(str(exc))
+    assert payload is not None, f"not a structured fleet error: {exc}"
+    assert payload.error_category == "transient"
+    assert payload.is_retryable is True
+    assert payload.attempted == attempted
+    assert "on every attempt" not in payload.description
+    match = PAUSE_RE.match(payload.description)
+    assert match, payload.description
+    retry_at = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    seconds = int(match.group(2))
+    # The stated time is about `seconds` from now, never earlier than the pause end.
+    delta = (retry_at - datetime.now(timezone.utc)).total_seconds()
+    assert seconds - 2 <= delta <= seconds + 2
+    return seconds
+
+
 @pytest.mark.asyncio
 async def test_retry_after_fails_fast_and_sends_nothing_during_window(stub, recorded_sleeps):
     stub.respond = lambda _req: (429, b"", "text/html", {"Retry-After": "900"})
@@ -188,18 +216,57 @@ async def test_retry_after_fails_fast_and_sends_nothing_during_window(stub, reco
     async with _GazetteClient() as client:
         with pytest.raises(ToolError) as exc_info:
             await _request_with_retry(client, "GET", f"{stub.base}/x", params={})
-    assert _error_category(exc_info.value) == "transient"
-    # One real request reached Gazette; its 429 opened a 900-second block.
+    # One real request reached Gazette; its 429 opened a 900-second pause, and
+    # the retry inside the pause reports the pause instead of a made-up 429.
+    seconds = _assert_local_pause(exc_info.value, f"GET {stub.base}/x")
+    assert 899 <= seconds <= 900
     assert len(stub.seen) == 1
     # Waiting stays short: no sleep anywhere near the Retry-After period.
     assert max(recorded_sleeps, default=0.0) < 10.0
 
-    # A later call inside the block answers locally and sends nothing.
+    # A later call inside the pause fails fast and sends nothing.
     async with _GazetteClient() as client:
         with pytest.raises(ToolError) as exc_info:
-            await _request_with_retry(client, "GET", f"{stub.base}/y", params={})
-    assert _error_category(exc_info.value) == "transient"
+            await _request_with_retry(client, "GET", f"{stub.base}/y", params={"q": "1"})
+    seconds = _assert_local_pause(exc_info.value, f"GET {stub.base}/y")
+    assert 1 <= seconds <= 900
     assert len(stub.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_429_logs_path_and_retry_after(stub, no_backoff, caplog):
+    stub.respond = lambda _req: (429, b"", "text/html", {"Retry-After": "900"})
+
+    with caplog.at_level(logging.WARNING, logger="http_client"):
+        async with _GazetteClient() as client:
+            with pytest.raises(ToolError):
+                await _request_with_retry(
+                    client, "GET", f"{stub.base}/notice/1/data.json", params={"view": "x"},
+                )
+            # Locally paused calls send nothing and log nothing.
+            with pytest.raises(ToolError):
+                await client.request("GET", f"{stub.base}/other", params={})
+
+    warnings = [r for r in caplog.records if r.name == "http_client" and r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "/notice/1/data.json" in message
+    assert "Retry-After=900" in message
+    assert "view=" not in message
+    assert len(stub.seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_429_without_retry_after_logs_missing(stub, no_backoff, caplog):
+    stub.respond = lambda _req: (429, b"", "text/html")
+
+    with caplog.at_level(logging.WARNING, logger="http_client"):
+        async with _GazetteClient() as client:
+            await client.request("GET", f"{stub.base}/z", params={})
+
+    [record] = [r for r in caplog.records if r.name == "http_client"]
+    assert "/z" in record.getMessage()
+    assert "Retry-After=<missing>" in record.getMessage()
 
 
 @pytest.mark.asyncio
@@ -247,26 +314,45 @@ async def test_refused_connection_is_transient(no_backoff):
 
 
 @pytest.mark.asyncio
-async def test_fetch_gazette_notice_sends_accept_and_returns_notice(stub, monkeypatch):
+async def test_fetch_gazette_notice_is_guarded_and_sends_nothing(stub, monkeypatch):
+    # Guarded until #98: the notice data URL is robots-disallowed and its 429
+    # (Retry-After: 900) would pause every Gazette tool (#107).
     monkeypatch.setattr(http_client, "GAZETTE_BASE", stub.base)
-    notice = {"title": "Official Gazette notice", "f:notice-code": "2452"}
-    stub.respond = lambda _req: (200, json.dumps(notice).encode(), "application/json")
 
-    result = await gazette._fetch_gazette_notice("12345")
+    with pytest.raises(ToolError) as exc_info:
+        await gazette._fetch_gazette_notice(" 12345 ")
 
-    assert result == notice
-    [req] = stub.seen
-    assert req["path"] == "/notice/12345/data.json"
-    assert req["query"] == {"view": "linked-data"}
-    assert req["accept"] == "application/json"
+    payload = parse_error_payload(str(exc_info.value))
+    assert payload is not None
+    assert payload.error_category == "configuration"
+    assert payload.is_retryable is False
+    assert payload.attempted == "GET /notice/12345"
+    assert "#98" in payload.description
+    assert "gazette_insolvency" in payload.description
+    assert stub.seen == []
+    assert http_client._gazette_blocked_until == 0.0
 
 
 @pytest.mark.asyncio
-async def test_fetch_gazette_notice_403_is_structured_error(stub, monkeypatch, no_backoff):
+async def test_gazette_search_still_works_after_gazette_notice(stub, monkeypatch):
+    from fastmcp import Client
+
+    from server import mcp
+
     monkeypatch.setattr(http_client, "GAZETTE_BASE", stub.base)
-    stub.respond = lambda _req: (403, b"", "text/html")
+    feed = {"f:total": "0", "entry": []}
+    stub.respond = lambda _req: (200, json.dumps(feed).encode(), "application/json")
 
-    with pytest.raises(ToolError) as exc_info:
-        await gazette._fetch_gazette_notice("12345")
+    async with Client(mcp) as client:
+        with pytest.raises(ToolError) as exc_info:
+            await client.call_tool("gazette_notice", {"notice_id": "4512345"})
+        payload = parse_error_payload(str(exc_info.value))
+        assert payload is not None
+        assert payload.error_category == "configuration"
+        assert stub.seen == []
 
-    assert _error_category(exc_info.value) == "auth_required"
+        result = await client.call_tool("gazette_insolvency", {"name": "carillion"})
+
+    assert result.structured_content["total_notices"] == 0
+    [req] = stub.seen
+    assert req["path"] == "/insolvency/notice/data.json"

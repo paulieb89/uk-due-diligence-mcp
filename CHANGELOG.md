@@ -20,6 +20,7 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 - During a sanctions list outage a failed list is retried at most once per 5 minutes, instead of every call re-downloading every list (#28).
 - Arguments a tool's input schema rejects (e.g. `sanctions_screen` with `entity_type="company"`, `gazette_insolvency` with a one-character `name`) return a structured fleet error with `error_category: "validation"` and `is_retryable: false`, carrying pydantic's message in `description`, instead of plain text. A new `StructuredErrorMiddleware`, ported from uk-legal-mcp, classifies any other tool failure that arrives without a fleet payload the same way; an unregistered tool name is unchanged. In `tool_calls_total` these schema rejections keep `error_category="validation"` but are now labelled `source="tool"` rather than `source="middleware"` (#41).
 - Sanctions bulk-list downloads now retry a 429, 503, timeout or connection error under the shared retry policy (3 attempts with backoff), still streaming to disk, and a final failure is logged as a structured error. A failed download no longer leaves its temp file behind (#68).
+- `gazette_notice` no longer requests the robots-disallowed notice data URL, whose 429 (`Retry-After: 900`) paused every Gazette tool for 15 minutes. It now returns a structured error until #98. A local Gazette pause is reported as local, with its retry time (#107).
 
 ## [1.8.0] — 2026-11-21
 
