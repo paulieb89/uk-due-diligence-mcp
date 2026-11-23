@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import http.client
+import logging
 import math
 import os
 import time
@@ -19,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from pathlib import Path
 from typing import Any, Optional
@@ -28,6 +30,8 @@ import httpx
 from mcpfleet_obs import raise_http_tool_error, raise_tool_error
 
 PACKAGE_NAME = "uk-due-diligence-mcp"
+
+logger = logging.getLogger(__name__)
 
 
 def project_version() -> str:
@@ -348,6 +352,32 @@ async def _gazette_pace() -> None:
             await asyncio.sleep(GAZETTE_WINDOW_SECONDS - (now - _gazette_sent[0]))
 
 
+def _raise_if_gazette_paused(attempted: str) -> None:
+    """Fail fast with a local-pause error while a Retry-After window is open.
+
+    The pause is this server's own, opened by an earlier upstream 429; no request
+    is sent. A ToolError ends _request_with_retry's loop, so a blocked call is
+    not retried or misreported as upstream answering 429 on every attempt.
+    """
+    remaining = _gazette_blocked_until - time.monotonic()
+    if remaining <= 0:
+        return
+    seconds = math.ceil(remaining)
+    # Rounded up to the whole second, so the stated time is never early.
+    retry_at = datetime.fromtimestamp(
+        math.ceil(datetime.now(timezone.utc).timestamp() + remaining), timezone.utc,
+    )
+    raise_tool_error(
+        "transient",
+        is_retryable=True,
+        attempted=attempted,
+        description=(
+            "Gazette requests paused by this server after an upstream 429; "
+            f"retry after {retry_at.strftime('%Y-%m-%dT%H:%M:%SZ')} ({seconds}s)."
+        ),
+    )
+
+
 class _GazetteClient:
     """Async stand-in for httpx.AsyncClient that sends GETs through urllib.
 
@@ -365,22 +395,24 @@ class _GazetteClient:
         global _gazette_blocked_until
         if method != "GET":
             raise ValueError(f"_GazetteClient only supports GET, got {method}")
+        # Same form as _request_with_retry's attempted: the caller's URL, no query.
+        attempted = f"{method} {url.split('?', 1)[0]}"
         if not url.startswith("http"):
             url = f"{GAZETTE_BASE}{url}"
 
-        remaining = _gazette_blocked_until - time.monotonic()
-        if remaining > 0:
-            # Still inside a Retry-After window: answer 429 locally, send nothing.
-            return httpx.Response(
-                429,
-                headers={"Retry-After": str(math.ceil(remaining))},
-                request=httpx.Request("GET", url),
-            )
-
+        _raise_if_gazette_paused(attempted)
         await _gazette_pace()
+        # A request queued behind the pacing lock may find a pause opened meanwhile.
+        _raise_if_gazette_paused(attempted)
+
         headers = {"User-Agent": USER_AGENT, **(kwargs.get("headers") or {})}
         resp = await asyncio.to_thread(_urllib_get, url, kwargs.get("params"), headers)
         if resp.status_code == 429:
+            logger.warning(
+                "Gazette upstream 429 on %s; Retry-After=%s",
+                resp.request.url.path,
+                resp.headers.get("retry-after", "<missing>"),
+            )
             _gazette_blocked_until = time.monotonic() + _gazette_retry_after(resp.headers)
         return resp
 
