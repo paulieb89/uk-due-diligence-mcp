@@ -2,7 +2,7 @@
 
 All notable changes to `uk-due-diligence-mcp` are documented here, starting with 1.7.0. Earlier releases are described in their GitHub release notes.
 
-## [Unreleased]
+## [1.9.0] — 2026-11-23
 
 ### Added
 
