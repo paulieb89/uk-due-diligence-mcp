@@ -235,9 +235,9 @@ async def test_healthy_screen_reports_no_partiality(monkeypatch, mcp_client):
 async def test_failed_build_is_not_retried_until_the_cooldown_expires(monkeypatch):
     """Without a cooldown every call re-downloads four bulk lists inside _LOCK.
 
-    _download_to_temp bypasses _request_with_retry and sanctions_client's read
-    timeout is 120s, so an unbounded retry costs minutes per caller during an
-    outage — a fast wrong answer traded for a slow hang.
+    _download_to_temp retries each list under the shared retry policy and
+    sanctions_client's read timeout is 120s, so an unbounded retry costs minutes
+    per caller during an outage — a fast wrong answer traded for a slow hang.
     """
     attempts = {"n": 0}
 

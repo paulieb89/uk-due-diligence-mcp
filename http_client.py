@@ -160,6 +160,66 @@ async def _request_with_retry(
     )
 
 
+async def _stream_to_file_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    path: str,
+) -> None:
+    """GET `url` and stream the body to `path`, with _request_with_retry's policy.
+
+    For bulk downloads that must not be buffered in memory (#68). Same retry
+    budget and classification as _request_with_retry: MAX_RETRIES attempts,
+    BACKOFF_BASE ** attempt sleep after a 429/503 or an httpx.RequestError
+    (including one raised mid-body), any other HTTP error status is terminal
+    via raise_http_tool_error, and exhausted retries are classified by the
+    most recent failure. Each attempt truncates `path` before writing, so a
+    partial body from a failed attempt never survives into a later success.
+    On failure `path` may hold a partial body; the caller owns its cleanup.
+    """
+    attempted = f"GET {url.split('?', 1)[0]}"
+    last_exc: Optional[Exception] = None
+    last_retryable_status: Optional[int] = None
+    last_was_status = False
+    for attempt in range(MAX_RETRIES):
+        try:
+            # The file and the response are both closed by their context
+            # managers before any backoff sleep or the next attempt.
+            with open(path, "wb") as fh:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code in (429, 503):
+                        last_retryable_status = resp.status_code
+                        last_was_status = True
+                        retryable_status = True
+                    else:
+                        retryable_status = False
+                        resp.raise_for_status()
+                        async for chunk in resp.aiter_bytes():
+                            fh.write(chunk)
+            if retryable_status:
+                await asyncio.sleep(BACKOFF_BASE ** attempt)
+                continue
+            return
+        except httpx.HTTPStatusError as exc:
+            # Only statuses outside (429, 503) reach raise_for_status(): terminal.
+            raise_http_tool_error(exc, attempted=attempted)
+        except httpx.RequestError as exc:
+            last_exc = exc
+            last_was_status = False
+            await asyncio.sleep(BACKOFF_BASE ** attempt)
+
+    if last_exc is not None and not last_was_status:
+        raise_http_tool_error(last_exc, attempted=attempted)
+    raise_tool_error(
+        "transient",
+        is_retryable=True,
+        attempted=attempted,
+        description=(
+            f"Upstream returned {last_retryable_status} on every attempt "
+            f"({MAX_RETRIES} retries) — retry later."
+        ),
+    )
+
+
 def _json_or_error(resp: httpx.Response, attempted: str | None = None) -> Any:
     """resp.json(), or a structured transient error for a non-JSON body.
 
@@ -365,6 +425,7 @@ __all__ = [
     "land_registry_client",
     "sanctions_client",
     "_request_with_retry",
+    "_stream_to_file_with_retry",
     "CH_BASE",
     "CHARITY_BASE",
     "GAZETTE_BASE",

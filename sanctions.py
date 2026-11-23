@@ -42,6 +42,7 @@ from http_client import (
     FCDO_UK_SANCTIONS_URL,
     OFAC_SDN_URL,
     UN_CONSOLIDATED_URL,
+    _stream_to_file_with_retry,
     sanctions_client,
 )
 from mcpfleet_obs import raise_tool_error
@@ -55,9 +56,10 @@ TTL_SECONDS = 24 * 60 * 60  # lists update on designation; a daily refresh is am
 # Per list: after a refresh of a list fails, that list is not retried until this has
 # passed; the current index (with the list's previous records, if any, marked stale)
 # is served meanwhile. Without it every call during an outage would re-download the
-# failed bulk lists inside _LOCK. _download_to_temp does not go through
-# _request_with_retry and sanctions_client's read timeout is 120s, so an unbounded
-# retry costs ~8 minutes per caller during an outage.
+# failed bulk lists inside _LOCK. _download_to_temp retries each list on 429/503 and
+# network errors (_stream_to_file_with_retry, the shared policy) and sanctions_client's
+# read timeout is 120s, so an unbounded retry would cost minutes per caller during an
+# outage.
 FAILURE_COOLDOWN_SECONDS = 5 * 60
 # A list whose last successful load is older than this is dropped from the index and
 # reported unavailable, rather than served stale indefinitely.
@@ -161,14 +163,23 @@ def _children(elem: ET.Element, name: str) -> list[ET.Element]:
 # ---------------------------------------------------------------------------
 
 async def _download_to_temp(url: str) -> str:
+    """Stream `url` to a new temp file and return its path; the caller deletes it.
+
+    Transient failures (429/503, network errors) are retried under the shared policy;
+    a final failure raises a structured ToolError. On any failure, cancellation
+    included, the temp file is removed before the exception propagates.
+    """
     fd, path = tempfile.mkstemp(suffix=".sanctions")
     os.close(fd)
-    async with sanctions_client() as client:
-        async with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with open(path, "wb") as fh:
-                async for chunk in resp.aiter_bytes():
-                    fh.write(chunk)
+    try:
+        async with sanctions_client() as client:
+            await _stream_to_file_with_retry(client, url, path)
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
     return path
 
 
