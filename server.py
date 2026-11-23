@@ -54,6 +54,7 @@ from starlette.responses import JSONResponse
 load_dotenv()
 
 from http_client import project_version  # noqa: E402 - after load_dotenv, like the domain modules
+from structured_errors import StructuredErrorMiddleware  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Server configuration
@@ -147,6 +148,9 @@ async def glama_connector_manifest(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 install(mcp, prefix="uk_due_diligence")
+# Directly after install(): inside the fleet metrics middleware, so
+# tool_calls_total records the classified category (#41).
+mcp.add_middleware(StructuredErrorMiddleware())
 
 # ---------------------------------------------------------------------------
 # Register all tools
@@ -251,6 +255,16 @@ def main() -> None:
         lifespan="on",
         log_level="info",
     )
+
+
+def main_stdio() -> None:
+    """Run the MCP server over stdio, for PyPI install / local MCP clients.
+
+    No startup sanctions warm in this mode: the sanctions index lazy-loads on the
+    first sanctions_screen call. Stdout carries the protocol, so log to stderr only.
+    The FastMCP banner is off because it checks pypi.org for updates on every launch.
+    """
+    mcp.run(transport="stdio", show_banner=False)
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ Homepage = "https://github.com/paulieb89/uk-due-diligence-mcp"
 Repository = "https://github.com/paulieb89/uk-due-diligence-mcp"
 
 [project.scripts]
-uk-due-diligence-mcp = "server:main"
+uk-due-diligence-mcp = "server:main_stdio"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
@@ -63,6 +63,7 @@ only-include = [
     "search_fetch.py",
     "models.py",
     "http_client.py",
+    "structured_errors.py",
 ]
 
 

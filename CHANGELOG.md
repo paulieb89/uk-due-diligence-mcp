@@ -7,6 +7,7 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 ### Added
 
 - `sanctions_screen`: new `lists_stale` (lists screened from a previous load because their latest refresh failed) and `list_as_at` (each screened list's own load time) fields. `as_at` is now the oldest screened list's load time (#26).
+- `uvx uk-due-diligence-mcp` runs the server over stdio for local MCP clients: the console script now points at a new `server:main_stdio` entry point. The sanctions index loads on the first `sanctions_screen` call in this mode. The Docker image (`python server.py`) still serves streamable HTTP (#51).
 
 ### Changed
 
@@ -17,6 +18,7 @@ All notable changes to `uk-due-diligence-mcp` are documented here, starting with
 
 - `sanctions_screen` keeps a list's last verified records when a refresh of that list fails, instead of dropping the list for up to 24 hours. Freshness is tracked per list; a list whose last successful load is more than 7 days old is dropped and reported in `lists_unavailable` (#26).
 - During a sanctions list outage a failed list is retried at most once per 5 minutes, instead of every call re-downloading every list (#28).
+- Arguments a tool's input schema rejects (e.g. `sanctions_screen` with `entity_type="company"`, `gazette_insolvency` with a one-character `name`) return a structured fleet error with `error_category: "validation"` and `is_retryable: false`, carrying pydantic's message in `description`, instead of plain text. A new `StructuredErrorMiddleware`, ported from uk-legal-mcp, classifies any other tool failure that arrives without a fleet payload the same way; an unregistered tool name is unchanged. In `tool_calls_total` these schema rejections keep `error_category="validation"` but are now labelled `source="tool"` rather than `source="middleware"` (#41).
 - Sanctions bulk-list downloads now retry a 429, 503, timeout or connection error under the shared retry policy (3 attempts with backoff), still streaming to disk, and a final failure is logged as a structured error. A failed download no longer leaves its temp file behind (#68).
 
 ## [1.8.0] — 2026-11-21
