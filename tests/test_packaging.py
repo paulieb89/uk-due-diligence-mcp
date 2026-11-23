@@ -29,6 +29,7 @@ EXPECTED_MODULES = [
     "search_fetch",
     "models",
     "http_client",
+    "structured_errors",
 ]
 
 

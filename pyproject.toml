@@ -63,6 +63,7 @@ only-include = [
     "search_fetch.py",
     "models.py",
     "http_client.py",
+    "structured_errors.py",
 ]
 
 
