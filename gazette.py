@@ -1,22 +1,26 @@
 """
-The Gazette corporate-insolvency tools and linked-data notice resource.
+The Gazette corporate-insolvency tools and per-notice text resource.
 
 Notice labels are keyed to The Gazette's authoritative current notice-code
 register. Search results preserve the notice code and a source-faithful label;
-full legal semantics remain available from the per-notice linked-data endpoint.
+the full notice wording comes from the per-notice XHTML+RDFa page
+(GET /notice/{id}, Accept: application/xml).
 """
 
 from __future__ import annotations
 
+import re
+import xml.etree.ElementTree as ET
 from typing import Annotated, Any
+from xml.parsers.expat import ExpatError
 
 from pydantic import Field
 from fastmcp import FastMCP
 
 from fastmcp.exceptions import ToolError
-from http_client import _json_or_error, _request_with_retry, gazette_client
+from http_client import GAZETTE_BASE, _json_or_error, _request_with_retry, gazette_client
 from mcpfleet_obs import raise_http_tool_error, raise_tool_error
-from models import GazetteInsolvencyResult, GazetteNotice
+from models import GazetteInsolvencyResult, GazetteNotice, GazetteNoticeResult
 
 # ---------------------------------------------------------------------------
 # Notice code taxonomy
@@ -96,7 +100,6 @@ SEVERITY: dict[str, int] = {
 
 
 def _strip_html(html: str) -> str:
-    import re
     return re.sub(r"<[^>]+>", " ", html).strip()
 
 
@@ -190,22 +193,263 @@ def _feed_total(raw: Any) -> int | None:
 # Shared fetch helper
 # ---------------------------------------------------------------------------
 
-async def _fetch_gazette_notice(notice_id: str) -> dict:
-    # Guarded until #98: sends no request. The notice data endpoint
-    # (GET /notice/{id}/data.json?view=linked-data) is disallowed by robots.txt
-    # and answers 429 with Retry-After: 900 on the first request, which paused
-    # every Gazette tool for 15 minutes (#107; docs/reference/gazette-api.md).
-    # Backs the gazette_notice tool, the notice:// resource and fetch("notice:...").
-    raise_tool_error(
-        "configuration",
-        is_retryable=False,
-        attempted=f"GET /notice/{notice_id.strip()}",
-        description=(
-            "The Gazette refuses this server's notice data endpoint, so full "
-            "notice text is unavailable until #98 lands. The notice's type, date "
-            "and URL from gazette_insolvency still stand."
-        ),
-    )
+# Notice IDs: numeric (4420724) or legacy (L-57793-2040, E-26343-2431-168).
+_NUMERIC_NOTICE_ID = re.compile(r"[0-9]+")
+_LEGACY_NOTICE_ID = re.compile(r"[A-Z]-[0-9]+(?:-[0-9]+)+")
+
+XHTML_NS = "http://www.w3.org/1999/xhtml"
+_X = f"{{{XHTML_NS}}}"
+# Element nesting deeper than this is refused before ElementTree builds a tree.
+# Real notices nest about 15 deep.
+NOTICE_MAX_DEPTH = 500
+
+
+def _validate_notice_id(notice_id: str) -> str:
+    """The stripped notice ID, or a validation error before any request is sent."""
+    nid = notice_id.strip()
+    if not (_NUMERIC_NOTICE_ID.fullmatch(nid) or _LEGACY_NOTICE_ID.fullmatch(nid)):
+        raise_tool_error(
+            "validation",
+            is_retryable=False,
+            attempted=f"gazette_notice({notice_id!r})",
+            description=(
+                f"Invalid Gazette notice ID {notice_id!r}: expected a numeric ID "
+                "(e.g. '4420724') or a legacy ID (e.g. 'L-57793-2040', 'E-26343-2431-168')."
+            ),
+        )
+    return nid
+
+
+class _UnsafeXML(Exception):
+    """The notice body declares entities or nests too deeply to parse safely."""
+
+
+def _preflight_xml(body: bytes) -> None:
+    """Reject entity declarations and excessive nesting before ElementTree parses.
+
+    Expat decodes the declared encoding (UTF-16 included), so a declaration is
+    caught however the bytes are encoded, and before any entity is expanded.
+    A plain DOCTYPE without entity declarations is allowed.
+    """
+    from xml.parsers import expat
+
+    parser = expat.ParserCreate()
+    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    depth = 0
+
+    def entity_decl(*_args: Any) -> None:
+        raise _UnsafeXML("the body declares an XML entity")
+
+    def unparsed_entity_decl(*_args: Any) -> None:
+        raise _UnsafeXML("the body declares an unparsed XML entity")
+
+    def external_entity_ref(*_args: Any) -> int:
+        raise _UnsafeXML("the body references an external XML entity")
+
+    def start(*_args: Any) -> None:
+        nonlocal depth
+        depth += 1
+        if depth > NOTICE_MAX_DEPTH:
+            raise _UnsafeXML(f"the body nests elements deeper than {NOTICE_MAX_DEPTH}")
+
+    def end(*_args: Any) -> None:
+        nonlocal depth
+        depth -= 1
+
+    parser.EntityDeclHandler = entity_decl
+    parser.UnparsedEntityDeclHandler = unparsed_entity_decl
+    parser.ExternalEntityRefHandler = external_entity_ref
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.Parse(body, True)
+
+
+def _classes(elem: ET.Element) -> list[str]:
+    return (elem.get("class") or "").split()
+
+
+def _is_rdfa_data(elem: ET.Element) -> bool:
+    return elem.tag == f"{_X}div" and "rdfa-data" in _classes(elem)
+
+
+def _visible_elements(root: ET.Element) -> list[ET.Element]:
+    """Every element under root in document order, skipping div.rdfa-data subtrees."""
+    out: list[ET.Element] = []
+    stack = [root]
+    while stack:
+        elem = stack.pop()
+        if _is_rdfa_data(elem):
+            continue
+        out.append(elem)
+        stack.extend(reversed(list(elem)))
+    return out
+
+
+def _visible_text(root: ET.Element) -> str:
+    """root's text in document order, skipping div.rdfa-data, whitespace collapsed.
+
+    Iterative, so nesting depth cannot exhaust the stack. A skipped element's
+    tail (the text after it) is kept.
+    """
+    parts: list[str] = []
+    stack: list[ET.Element | str] = [root]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            parts.append(item)
+            continue
+        if _is_rdfa_data(item):
+            continue
+        if item.text:
+            parts.append(item.text)
+        for child in reversed(list(item)):
+            if child.tail:
+                stack.append(child.tail)
+            stack.append(child)
+    return " ".join("".join(parts).split())
+
+
+def _or_none(value: str | None) -> str | None:
+    """Stripped value, or None when absent or blank (unknown is null, never "")."""
+    if value is None:
+        return None
+    value = " ".join(value.split())
+    return value or None
+
+
+def _by_property(elements: list[ET.Element], prop: str) -> ET.Element | None:
+    for elem in elements:
+        if prop in (elem.get("property") or "").split():
+            return elem
+    return None
+
+
+def _property_value(elements: list[ET.Element], prop: str) -> str | None:
+    """First element carrying the RDFa property: its text, else its @content."""
+    elem = _by_property(elements, prop)
+    if elem is None:
+        return None
+    return _or_none(_visible_text(elem)) or _or_none(elem.get("content"))
+
+
+def _dd_label(elements: list[ET.Element], ui_class: str) -> str | None:
+    for elem in elements:
+        if elem.tag == f"{_X}dd" and elem.get("data-ui-class") == ui_class:
+            return _or_none(_visible_text(elem))
+    return None
+
+
+_ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _iso_date(value: str | None) -> str | None:
+    if not value:
+        return None
+    date = value.strip()[:10]
+    return date if _ISO_DATE.fullmatch(date) else None
+
+
+def _content_div(root: ET.Element) -> ET.Element | None:
+    """The notice body: the first div.content inside body//article."""
+    body = root.find(f"{_X}body")
+    if body is None:
+        return None
+    for article in body.iter(f"{_X}article"):
+        for div in article.iter(f"{_X}div"):
+            if "content" in _classes(div):
+                return div
+    return None
+
+
+def _parse_notice(nid: str, body: bytes, attempted: str) -> GazetteNoticeResult:
+    """Parse a notice's XHTML+RDFa body, or raise a retryable transient error."""
+
+    def fail(problem: str) -> None:
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=f"The Gazette returned an unusable notice body: {problem}. Retry later.",
+        )
+
+    try:
+        _preflight_xml(body)
+        root = ET.fromstring(body)
+    except _UnsafeXML as exc:
+        fail(str(exc))
+    except (ET.ParseError, ExpatError) as exc:
+        fail(f"the XML is not well-formed ({exc})")
+    except RecursionError:
+        fail("the XML nests too deeply to parse")
+
+    try:
+        content = _content_div(root)
+        if content is None:
+            fail("no div.content (notice body) inside the article")
+        elements = _visible_elements(root)
+        head = root.find(f"{_X}head")
+        title_elem = head.find(f"{_X}title") if head is not None else None
+        title = _or_none(_visible_text(title_elem)) if title_elem is not None else None
+
+        pub = _by_property(elements, "gaz:hasPublicationDate")
+        publication_date = _iso_date(pub.get("content")) if pub is not None else None
+        if publication_date is None:
+            first_time = next((e for e in elements if e.tag == f"{_X}time"), None)
+            if first_time is not None:
+                publication_date = _iso_date(first_time.get("datetime"))
+
+        return GazetteNoticeResult(
+            notice_id=nid,
+            notice_url=f"{GAZETTE_BASE}/notice/{nid}",
+            title=title,
+            notice_code=_property_value(elements, "gaz:hasNoticeCode"),
+            notice_type=_dd_label(elements, "notice-type"),
+            category=_dd_label(elements, "category"),
+            publication_date=publication_date,
+            company_number=_property_value(elements, "gazorg:companyNumber"),
+            company_name=_property_value(elements, "gazorg:name"),
+            previous_company_name=_property_value(elements, "gazorg:previousCompanyName"),
+            text=_visible_text(content),
+        )
+    except RecursionError:
+        fail("the XML nests too deeply to parse")
+
+
+async def _fetch_gazette_notice(notice_id: str) -> GazetteNoticeResult:
+    """Fetch one notice: GET /notice/{id} with Accept: application/xml (#98).
+
+    robots.txt allows this path; it disallows the data.* formats and
+    ?view=linked-data, so neither is ever requested. One request per notice,
+    through the shared Gazette client (#86 User-Agent, 5-per-10s pacing and the
+    #107 Retry-After pause). Backs the gazette_notice tool, the notice://
+    resource and fetch("notice:...").
+    """
+    nid = _validate_notice_id(notice_id)
+    path = f"/notice/{nid}"
+    attempted = f"GET {path}"
+    async with gazette_client() as client:
+        try:
+            resp = await _request_with_retry(
+                client, "GET", path, headers={"Accept": "application/xml"}
+            )
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise_http_tool_error(exc, attempted=attempted)
+
+    media_type = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/xml":
+        raise_tool_error(
+            "transient",
+            is_retryable=True,
+            attempted=attempted,
+            description=(
+                f"The Gazette answered HTTP {resp.status_code} with content-type "
+                f"{resp.headers.get('content-type', 'unknown')}, not application/xml; "
+                "likely a site or error page. Retry later."
+            ),
+        )
+    return _parse_notice(nid, resp.content, attempted)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +461,7 @@ def register_tools(mcp: FastMCP) -> None:
     @mcp.tool(
         name="gazette_notice",
         annotations={
-            "title": "Get Gazette Notice Full Text",
+            "title": "Get Gazette Notice Text and Fields",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
@@ -226,17 +470,23 @@ def register_tools(mcp: FastMCP) -> None:
     )
     async def gazette_notice(
         notice_id: Annotated[str, Field(
-            description="Numeric Gazette notice ID. Returned as notice_numeric_id by gazette_insolvency.",
-            min_length=1, max_length=20,
+            description=(
+                "Gazette notice ID: numeric (e.g. '4420724') or legacy "
+                "(e.g. 'L-57793-2040', 'E-26343-2431-168'). Returned as "
+                "notice_numeric_id by gazette_insolvency."
+            ),
+            min_length=1,
         )],
-    ) -> dict:
-        """Fetch the full legal wording of a Gazette notice by numeric notice ID.
+    ) -> GazetteNoticeResult:
+        """Fetch a Gazette notice's full legal wording and labelled fields by notice ID.
 
-        Returns the JSON-LD linked-data record for the notice: publisher, notice
-        code, publication date, and the party fields the Gazette supplies. Body
-        text and court are not guaranteed; the Gazette web page has the full
-        wording. Use gazette_insolvency first to find
-        notice_numeric_id values.
+        Returns text (the full notice wording), title, notice_code, notice_type,
+        category, publication_date (YYYY-MM-DD), company_number, company_name,
+        previous_company_name and notice_url. Fields the notice does not carry
+        are null. Legacy notices (L-.../E-... IDs) usually carry no structured
+        company number: a null company_number means the notice has no structured
+        number, not that it concerns a different company; read the text. Use
+        gazette_insolvency first to find notice_numeric_id values.
         """
         return await _fetch_gazette_notice(notice_id)
 
@@ -397,13 +647,14 @@ def register_resources(mcp: FastMCP) -> None:
         "notice://{notice_id}",
         name="gazette_notice",
         description=(
-            "Full content of a Gazette notice by numeric notice ID. "
-            "Use the notice_numeric_id returned by gazette_insolvency. "
-            "Returns JSON-LD linked-data view of the notice."
+            "Full text and labelled fields of a Gazette notice by notice ID. "
+            "Use the notice_numeric_id returned by gazette_insolvency (numeric or legacy L-/E- form). "
+            "Returns the notice's text (full wording), title, notice_code, notice_type, category, "
+            "publication_date, company_number, company_name, previous_company_name and notice_url; "
+            "absent fields are null."
         ),
         mime_type="application/json",
     )
     async def gazette_notice_resource(notice_id: str) -> str:
-        import json
-        data = await _fetch_gazette_notice(notice_id)
-        return json.dumps(data)
+        result = await _fetch_gazette_notice(notice_id)
+        return result.model_dump_json()

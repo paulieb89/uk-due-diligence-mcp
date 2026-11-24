@@ -1199,6 +1199,71 @@ class GazetteNotice(BaseModel):
     )
 
 
+class GazetteNoticeResult(BaseModel):
+    """One Gazette notice: its full wording plus the labelled fields it carries.
+
+    Read from the notice's XHTML+RDFa page (GET /notice/{id}, Accept:
+    application/xml). A field the notice does not carry is null (unknown),
+    never an empty string.
+    """
+
+    model_config = BASE_CFG
+
+    notice_id: str = Field(
+        ...,
+        description=(
+            "The Gazette notice ID as requested: numeric (e.g. '4420724') or legacy "
+            "(e.g. 'L-57793-2040')."
+        ),
+    )
+    notice_url: str = Field(
+        ..., description="The notice's page on The Gazette (https://www.thegazette.co.uk/notice/{id})."
+    )
+    title: str | None = Field(
+        None,
+        description=(
+            "The notice's title. Modern notices use the company name; legacy notices "
+            "use the notice type (e.g. 'Winding-Up Orders')."
+        ),
+    )
+    notice_code: str | None = Field(
+        None,
+        description="Gazette notice code (e.g. '2410' appointment of administrators, '2452' winding-up order).",
+    )
+    notice_type: str | None = Field(
+        None,
+        description="The Gazette's own notice type label (e.g. 'Appointment of Administrators').",
+    )
+    category: str | None = Field(
+        None, description="The Gazette's category label (e.g. 'Corporate Insolvency')."
+    )
+    publication_date: str | None = Field(
+        None, description="Publication date (ISO YYYY-MM-DD); null when the notice states none."
+    )
+    company_number: str | None = Field(
+        None,
+        description=(
+            "Companies House number from the notice's structured data. Null means the "
+            "notice carries no structured number (common on legacy notices), not that it "
+            "is about a different company: check the text. Never parsed from the text."
+        ),
+    )
+    company_name: str | None = Field(
+        None, description="Company name from the notice's structured data; null when absent."
+    )
+    previous_company_name: str | None = Field(
+        None,
+        description="Previous company name from the notice's structured data; null when absent.",
+    )
+    text: str = Field(
+        ...,
+        description=(
+            "The full notice wording, as published, with whitespace collapsed. Read it "
+            "before drawing any legal conclusion from the notice type."
+        ),
+    )
+
+
 class GazetteInsolvencyResult(BaseModel):
     """Aggregated Gazette insolvency notice search result."""
 

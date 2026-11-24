@@ -55,12 +55,14 @@ CASES: dict[str, list[dict]] = {
     "disqualified_profile": [{"officer_id": "abc123"}],
     "land_title_search": [{"address_or_postcode": "NG1 1AB"}],
     "gazette_insolvency": [{"name": "carillion"}],
+    "gazette_notice": [{"notice_id": "4512345"}, {"notice_id": "L-57793-2040"}],
     "sanctions_screen": [{"name": "Rosneft"}],
     "search": [{"query": "carillion"}],
     "fetch": [
         {"id": "company:00445790"},
         {"id": "charity:202918"},
         {"id": "disqualification:abc123"},
+        {"id": "notice:4512345"},
     ],
 }
 
@@ -88,16 +90,7 @@ INVALID_CASES: dict[str, list[dict]] = {
 }
 
 # Tools that make no upstream call, so there is nothing to force.
-NO_UPSTREAM: dict[str, str] = {
-    "gazette_notice": "guarded until #98",
-}
-
-# Guarded notice paths (#107): no request is sent, so instead of the forced
-# upstream failures they must return the guard's structured error.
-GUARDED_NOTICE_CASES: list[tuple[str, dict]] = [
-    ("gazette_notice", {"notice_id": "4512345"}),
-    ("fetch", {"id": "notice:4512345"}),
-]
+NO_UPSTREAM: dict[str, str] = {}
 
 HTML = b"<!DOCTYPE html><html><body>Service temporarily unavailable</body></html>"
 
@@ -214,27 +207,14 @@ async def test_schema_rejected_arguments_are_validation(monkeypatch, mcp_client,
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["timeout", "html"])
-@pytest.mark.parametrize(
-    "tool, args", GUARDED_NOTICE_CASES, ids=[t for t, _ in GUARDED_NOTICE_CASES],
-)
-async def test_guarded_notice_paths_are_configuration(monkeypatch, mcp_client, mode, tool, args):
-    _force(monkeypatch, mode)
-    payload = await _error_payload(mcp_client, tool, args)
-    assert payload.error_category == "configuration", payload
-    assert payload.is_retryable is False
-    assert payload.attempted == "GET /notice/4512345"
-    assert "#98" in payload.description
-
-
-@pytest.mark.asyncio
-async def test_guarded_notice_resource_is_configuration(monkeypatch, mcp_client):
+async def test_notice_resource_upstream_failure_is_transient(monkeypatch, mcp_client, mode):
     from mcp.shared.exceptions import MCPError
 
-    _force(monkeypatch, "timeout")
+    _force(monkeypatch, mode)
     with pytest.raises(MCPError) as exc_info:
         await mcp_client.read_resource("notice://4512345")
     payload = parse_error_payload(str(exc_info.value))
     assert payload is not None, exc_info.value
-    assert payload.error_category == "configuration", payload
-    assert payload.is_retryable is False
+    assert payload.error_category == "transient", payload
+    assert payload.is_retryable is True
     assert payload.attempted == "GET /notice/4512345"

@@ -115,6 +115,16 @@ def _expect_filtered(field: str, value: str) -> Callable[[Outcome], tuple[bool, 
     return check
 
 
+def _expect_wilko_notice(o: Outcome) -> tuple[bool, str]:
+    if o.is_error:
+        return False, _err(o)
+    number, text = o.data.get("company_number"), o.data.get("text") or ""
+    return number == "00365335" and bool(text), (
+        f"company_number={number!r}, notice_code={o.data.get('notice_code')!r}, "
+        f"text={len(text)} chars"
+    )
+
+
 CALLS = [
     Call("profile unknown number", "company_profile", {"company_number": "99999999"},
          "not_found", "not_found", _expect_category("not_found")),
@@ -138,6 +148,9 @@ CALLS = [
     Call("sanctions bad entity_type", "sanctions_screen",
          {"name": "Rosneft", "entity_type": "company"},
          "unfiltered, entity_type_filter null, 2 hits", "validation error", _expect_rejected),
+    Call("gazette notice text (#98)", "gazette_notice", {"notice_id": "4420724"},
+         "configuration error (guarded, #107)", "company_number 00365335 with notice text",
+         _expect_wilko_notice),
 ]
 
 

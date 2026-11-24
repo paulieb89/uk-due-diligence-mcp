@@ -70,14 +70,14 @@ The Gazette Notice Feed (no credentials). `gazette_insolvency` searches corporat
 <!-- BEGIN GENERATED: tools prefix=gazette_ -->
 | Tool | Title | Summary |
 |---|---|---|
-| `gazette_notice` | Get Gazette Notice Full Text | Fetch the full legal wording of a Gazette notice by numeric notice ID. |
+| `gazette_notice` | Get Gazette Notice Text and Fields | Fetch a Gazette notice's full legal wording and labelled fields by notice ID. |
 | `gazette_insolvency` | Search Gazette Corporate Insolvency Notices | Search The Gazette's corporate insolvency notices by company name. |
 <!-- END GENERATED -->
 
 <!-- BEGIN GENERATED: templates prefix=notice:// -->
 | Resource | Name | Summary |
 |---|---|---|
-| `notice://{notice_id}` | gazette_notice | Full content of a Gazette notice by numeric notice ID. |
+| `notice://{notice_id}` | gazette_notice | Full text and labelled fields of a Gazette notice by notice ID. |
 <!-- END GENERATED -->
 
 ## HM Land Registry

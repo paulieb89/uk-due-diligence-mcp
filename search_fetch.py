@@ -15,8 +15,7 @@ ID scheme:
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import Field
 from fastmcp import FastMCP
@@ -274,17 +273,18 @@ def register_tools(mcp: FastMCP) -> None:
             }
 
         if prefix == "notice":
-            data: dict[str, Any] = await _fetch_gazette_notice(value)
-            title = (
-                data.get("title")
-                or data.get("f:notice-code")
-                or f"Gazette notice {value}"
-            )
+            notice = await _fetch_gazette_notice(value)
             return {
                 "id": id,
-                "title": title,
-                "content": json.dumps(data),
-                "metadata": {"source": "gazette"},
+                "title": notice.notice_type or notice.title or f"Gazette notice {notice.notice_id}",
+                "content": notice.text,
+                "metadata": {
+                    "source": "gazette",
+                    "notice_code": notice.notice_code,
+                    "publication_date": notice.publication_date,
+                    "company_number": notice.company_number,
+                    "notice_url": notice.notice_url,
+                },
             }
 
         raise_tool_error(
