@@ -2,6 +2,16 @@
 
 All notable changes to `uk-due-diligence-mcp` are documented here, starting with 1.7.0. Earlier releases are described in their GitHub release notes.
 
+## [Unreleased]
+
+### Breaking
+
+- `gazette_notice`, the `notice://{id}` resource and `fetch("notice:…")` return a `GazetteNoticeResult` (the notice's full `text` plus labelled fields: `notice_id`, `notice_url`, `title`, `notice_code`, `notice_type`, `category`, `publication_date`, `company_number`, `company_name`, `previous_company_name`) instead of a JSON-LD record. Absent fields are null. `fetch("notice:…")` puts the text in `content` and `notice_code`, `publication_date`, `company_number` and `notice_url` in `metadata`.
+
+### Fixed
+
+- The notice's full text is available again, via a robots-compliant route: one `GET /notice/{id}` with `Accept: application/xml`, under the existing Gazette User-Agent, pacing and 429 pause. Legacy `L-…`/`E-…` notice IDs are accepted; any other ID is a `validation` error and sends no request (#98).
+
 ## [1.9.0] — 2026-11-23
 
 ### Added

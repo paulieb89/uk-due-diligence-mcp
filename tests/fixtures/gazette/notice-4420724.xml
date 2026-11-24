@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture, not a capture: the sandbox that wrote it could not reach
+     www.thegazette.co.uk. Built from the field table in issue #98 and the
+     structure in docs/reference/gazette-api.md (Per-notice data.xml). The body
+     wording is abridged. Real response: GET /notice/4420724, Accept: application/xml. -->
+<html xmlns="http://www.w3.org/1999/xhtml" IdURI="https://www.thegazette.co.uk/id/notice/4420724" prefix="gaz: https://www.thegazette.co.uk/def/publication# gazorg: https://www.thegazette.co.uk/def/organisation# insolvency: https://www.thegazette.co.uk/def/insolvency#">
+  <head>
+    <title>WILKO LIMITED</title>
+  </head>
+  <body>
+    <article class="full-notice full-notice-2410">
+      <header>
+        <dl class="metadata">
+          <dt>Type:</dt>
+          <dd data-ui-class="notice-type">Appointment of Administrators</dd>
+          <dt>Category:</dt>
+          <dd data-ui-class="category">Corporate Insolvency</dd>
+          <dt>Notice code:</dt>
+          <dd property="gaz:hasNoticeCode">2410</dd>
+          <dt>Publication date:</dt>
+          <dd property="gaz:hasPublicationDate" datatype="xsd:dateTime" content="2023-08-14T17:14:45"><time datetime="2023-08-14T17:14:45">14 August 2023</time></dd>
+          <dt>Notice ID:</dt>
+          <dd property="gaz:hasNoticeID">4420724</dd>
+        </dl>
+      </header>
+      <div class="content" about="this:notifiableThing" data-gazettes-type="2410">
+        <div class="rdfa-data">
+          <span property="gazorg:companyNumber">99999999</span>
+          <span property="gazorg:name">HIDDEN ENRICHMENT COMPANY</span>
+          <span property="gaz:hasPostcode">ZZ1 1ZZ</span> HIDDEN-ENRICHMENT-TEXT
+        </div>
+        <p>In the High Court of Justice
+          Business and Property Courts in Birmingham</p>
+        <p><span property="gazorg:name">WILKO LIMITED</span> (Company Number <span property="gazorg:companyNumber">00365335</span> )</p>
+        <p>Previous Name of Company: <span property="gazorg:previousCompanyName">Wilko Retail Limited</span></p>
+        <p>Nature of Business: Retail.</p>
+        <p>Date of Appointment: <span property="insolvency:dateOfAppointment" content="2023-08-10">10 August 2023</span></p>
+      </div>
+    </article>
+  </body>
+</html>

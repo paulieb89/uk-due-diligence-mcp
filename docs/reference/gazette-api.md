@@ -4,6 +4,7 @@ as_of: 2026-11-21
 verified_by: live probes + official docs
 probes: 26 requests to www.thegazette.co.uk, 2026-11-21 15:38–15:45 UTC, curl, User-Agent `uk-due-diligence-mcp-docs (+https://github.com/paulieb89/uk-due-diligence-mcp)`
 related: gazette.py, http_client.py, issue #98
+updated: 2026-11-24 (issue #98 probes of /notice/{id} with Accept: application/xml; see Per-notice formats)
 ---
 
 # The Gazette data API
@@ -20,10 +21,11 @@ The official developer docs ([TheGazette/DevDocs][dd-repo]) were last changed in
 
 ## TL;DR for this repo
 
-1. **`data.json?view=linked-data` is blocked, not broken.** Our per-notice call (`gazette.py` `_fetch_gazette_notice`) is `GET /notice/{id}/data.json?view=linked-data` with `Accept: application/json`. It returns **429 `text/html` from `awselb/2.0` with `Retry-After: 900`** (**observed**). robots.txt disallows `*/notice/*?view=linked-data*` (**documented**, [robots.txt][robots]). This matches what #98 reports from Fly ("429 on every attempt"). The 500 in #98 comes from the plain `data.json`, with no `view` parameter.
+0. **Route in use (since #98, 2026-11-24): `GET /notice/{id}` with `Accept: application/xml`.** `gazette.py` `_fetch_gazette_notice` sends exactly that, one request per notice, and parses the XHTML+RDFa body. Items 1–4 below are the 2026-11-21 findings that led there.
+1. **`data.json?view=linked-data` is blocked, not broken.** The per-notice call before #107 (`gazette.py` `_fetch_gazette_notice`) was `GET /notice/{id}/data.json?view=linked-data` with `Accept: application/json`. It returns **429 `text/html` from `awselb/2.0` with `Retry-After: 900`** (**observed**). robots.txt disallows `*/notice/*?view=linked-data*` (**documented**, [robots.txt][robots]). This matches what #98 reports from Fly ("429 on every attempt"). The 500 in #98 comes from the plain `data.json`, with no `view` parameter.
 2. **Plain `/notice/{id}/data.json` returns 500** with an XML body, even though the header says `Content-Type: application/json` (**observed**).
 3. **`/notice/{id}/data.xml` returns 200**, but robots.txt **disallows** `/notice/*/data.xml` (**documented**). The same goes for `data.rdf`, `data.ttl`, `data.jsonld` and `data.pdf`. The fair-use policy requires crawlers to obey robots.txt. A `data.xml` fallback for #98 would therefore break the fair-use policy, even though it works today.
-4. **`GET /notice/{id}`** is not disallowed by robots.txt. With curl's default `Accept: */*` it returned **the same bytes as `data.xml`** (`application/xml`, 13,266 bytes, byte-identical) (**observed**). This is the robots-compliant route to the XHTML+RDFa body. The official docs say `*/*` should return the full HTML page with site chrome, so docs and behaviour disagree here. Content negotiation on this URL (`Accept: application/ld+json`, `text/html`) is **not verified**.
+4. **`GET /notice/{id}`** is not disallowed by robots.txt. With curl's default `Accept: */*` it returned **the same bytes as `data.xml`** (`application/xml`, 13,266 bytes, byte-identical) (**observed**) for a modern numeric ID. This is the robots-compliant route to the XHTML+RDFa body. For **legacy** IDs (`L-…`, `E-…`), `*/*` returns the full HTML site page as `text/html`, which is not well-formed XML; `Accept: application/xml` returns the XHTML+RDFa (**observed** 2026-11-24, #98). That is why the client sends `Accept: application/xml` explicitly. `Accept: application/ld+json` returns 200 JSON-LD with structured fields but **no notice text** (**observed** 2026-11-24, #98).
 5. **robots.txt sets `Crawl-delay: 10`** (**documented**). That is stricter than the "5 requests per 10 seconds" in the fair-use policy, which is what `http_client.py` paces to.
 6. The fair-use policy says to crawl **between 9pm and 7am UK time** and to include an **application version** in the User-Agent (**documented**). `http_client.USER_AGENT` includes a version. These probes ran in business hours and their User-Agent had no version.
 7. Feed: when `results-page-size` is over 100, the feed silently caps the page at 100. In one probe without `text`, 200 returned 500 (**observed**). `noticetype` had **no observable effect** on `/insolvency/notice` (**observed**). A single result still arrives as a **list** (**observed**).
@@ -125,7 +127,7 @@ From `GET /insolvency/notice/data.feed?text=carillion&categorycode=24&results-pa
 
 ### Per-notice `data.xml` (XHTML+RDFa)
 
-This is the structure to parse for the #98 fallback. It was **observed** on notice 5256044 (code 2452, Winding-Up Order). The same bytes come back from `GET /notice/5256044` with `Accept: */*`.
+This is the structure `gazette.py` parses for #98, served from `GET /notice/{id}` with `Accept: application/xml` (never from `data.xml` itself, which is robots-disallowed). It was **observed** on notice 5256044 (code 2452, Winding-Up Order). The same bytes come back from `GET /notice/5256044` with `Accept: */*`.
 
 | What you need | Where it is |
 |---|---|
@@ -149,20 +151,29 @@ Parsing caveats (**observed**):
 - Some text sits in `@content` attributes rather than in element text, e.g. `foaf:name` on empty spans. A plain text extraction will miss it, and gets the human-readable text instead.
 - The XML is well-formed. Response headers: `x-robots-tag: noindex,follow`, `content-disposition: inline;data.xml`, `cache-control: public, s-maxage=7200`. It was served from the CloudFront cache (`x-cache: Hit`).
 
-Only one notice (a modern numeric-ID 2452) was sampled. The shape of legacy `L-…` notices and of other notice codes is **not verified**.
+The 2026-11-21 pass sampled one notice (a modern numeric-ID 2452). The #98 probes on 2026-11-24 checked the same structure on `4420724` (2410), `4953471` (2443) and legacy `L-57793-2040` (2452). On the legacy notice:
+
+- the title is the notice type (`Winding-Up Orders`);
+- there are no `gazorg:companyNumber`, `gazorg:name` or `gazorg:previousCompanyName` properties (the number appears only in the body text, and `gazette.py` does not parse it from there);
+- `gaz:hasPublicationDate` has no `@content`; the date is only in `time/@datetime` (`2005-10-21`). `gazette.py` falls back to the first `time/@datetime` outside `div.rdfa-data`, cut to `YYYY-MM-DD`.
+
+`E-…` legacy notices were probed only with `Accept: */*` (HTML site page); their `application/xml` shape is expected to match `L-…` but is **not verified**.
 
 ## Per-notice formats
 
-All rows were probed on notice 5256044 unless they say otherwise. In the "Robots" column, "disallowed" means robots.txt forbids the path.
+All rows were probed on notice 5256044 on 2026-11-21 unless they say otherwise. In the "Robots" column, "disallowed" means robots.txt forbids the path.
+
+**Route in use:** `/notice/{id}` with `Accept: application/xml` (first row). `gazette.py` requires the response media type to be exactly `application/xml` (parameters such as `charset` allowed) and returns a retryable `transient` error otherwise, for a malformed body, or for a body with no `div.content`. It does not parse the HTML site page.
 
 | Format / URL | Documented response | Status today | Robots | Notes |
 |---|---|---|---|---|
-| `/notice/{id}`, `Accept: */*` (curl default) | (X)HTML5+RDFa page with site chrome ([formats][formats]) | **200 `application/xml`** | allowed | Byte-identical to `data.xml`, with no site chrome. The docs and behaviour disagree. |
+| `/notice/{id}`, `Accept: application/xml` (**our code path**, #98) | not listed | **200 `application/xml`**, well-formed XHTML+RDFa (**observed** 2026-11-24 on 4420724, 18,690 B; 4953471; L-57793-2040, 9,805 B) | allowed | For 4420724, byte-identical to the `*/*` response. Works for legacy `L-…` IDs too. |
+| `/notice/{id}`, `Accept: */*` (curl default) | (X)HTML5+RDFa page with site chrome ([formats][formats]) | **200 `application/xml`** for modern numeric IDs; **200 `text/html` site page** for legacy IDs (L-57793-2040, E-26343-2431-168; **observed** 2026-11-24) | allowed | Modern: byte-identical to `data.xml`, with no site chrome. Legacy: the full site page, not well-formed XML. Not used. |
 | `/notice/{id}`, `Accept: text/html` | HTML page | not verified | allowed | Probe cancelled |
-| `/notice/{id}`, `Accept: application/ld+json` | JSON-LD | not verified | allowed | Probe cancelled. This is the most promising robots-compliant JSON route. |
+| `/notice/{id}`, `Accept: application/ld+json` | JSON-LD | **200 JSON-LD** with structured fields but **no notice body text** (**observed** 2026-11-24, #98) | allowed | Not used: the text needs the XML route, and one request per notice is the budget. |
 | `/notice/{id}/data.xml` | XHTML+RDFa, notice content only | **200** `application/xml;charset=UTF-8`, 13,266 bytes | **disallowed** | Structure above |
 | `/notice/{id}/data.json`, `Accept: application/json` | not listed without `view` | **500** `application/json`; body `<?xml …?><error><status>500</status></error>` | allowed | #98. 3395688 was not re-probed in this pass; #98 reports 500 for it too. |
-| `/notice/{id}/data.json?view=linked-data`, `Accept: application/json` (**our code path**) | "JSON LD" ([notice.md][dd-notice]) or "JSON" (content-negotiation table) | **429 `text/html`**, `server: awselb/2.0`, `Retry-After: 900` | **disallowed** (`*/notice/*?view=linked-data*`) | The block looked path-specific: the next two requests (plain `data.json`, `data.xml`) were answered normally. |
+| `/notice/{id}/data.json?view=linked-data`, `Accept: application/json` (our code path until #107) | "JSON LD" ([notice.md][dd-notice]) or "JSON" (content-negotiation table) | **429 `text/html`**, `server: awselb/2.0`, `Retry-After: 900` | **disallowed** (`*/notice/*?view=linked-data*`) | The block looked path-specific: the next two requests (plain `data.json`, `data.xml`) were answered normally. |
 | `/notice/{id}/data.jsonld` | JSON-LD | not verified | disallowed | |
 | `/notice/{id}/data.rdf` | RDF/XML | not verified | disallowed | |
 | `/notice/{id}/data.ttl` | Turtle | not verified | disallowed | |
@@ -220,14 +231,14 @@ Licensing (**documented**):
 
 ## Known issues (as of 2026-11-21)
 
-1. **#98: per-notice JSON is unavailable.**
+1. **#98: per-notice JSON is unavailable** (resolved for this repo on 2026-11-24 by switching to `GET /notice/{id}` with `Accept: application/xml`; the findings below are as of 2026-11-21).
    - Plain `/notice/{id}/data.json` → 500, with an XML error body under a JSON content type (**observed**, 5256044).
    - `/notice/{id}/data.json?view=linked-data` (what `gazette.py` requests) → 429 with `Retry-After: 900` from the WAF/ELB (**observed**). That path is robots-disallowed (**documented**).
    - From Fly, #98 reports "429 on every attempt", which is consistent with the second bullet.
    - Ways forward, from the evidence above:
      - `data.xml` works, but it is robots-disallowed.
-     - `GET /notice/{id}` with `Accept: */*` or `application/xml` returns the same XHTML+RDFa and is robots-allowed (**observed** for `*/*` only).
-     - Content negotiation for JSON-LD on `/notice/{id}` is **not verified**.
+     - `GET /notice/{id}` with `Accept: */*` or `application/xml` returns the same XHTML+RDFa and is robots-allowed (**observed** for `*/*` only on 2026-11-21; `application/xml` **observed** on 2026-11-24, and required for legacy IDs).
+     - Content negotiation for JSON-LD on `/notice/{id}` returns no body text (**observed** 2026-11-24).
 2. **Feed `results-page-size` above 100**: silently capped at 100 when `text` is set. In one probe without `text`, size 200 → 500 (**observed**). `FEED_PAGE_SIZE = 100` in `gazette.py` is safe.
 3. **`noticetype` appears to be ignored** on `/insolvency/notice` (**observed**). Do not rely on it to narrow results. Filter on `f:notice-code` client-side, as `gazette.py` already does.
 4. **Paging links drop `results-page-size`** (**observed**).

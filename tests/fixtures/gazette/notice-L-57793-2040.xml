@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SYNTHETIC fixture, not a capture: the sandbox that wrote it could not reach
+     www.thegazette.co.uk. Built from the field table in issue #98 for this
+     legacy notice: no gazorg properties, no publication-date @content, the date
+     only in <time datetime>. The body wording is abridged.
+     Real response: GET /notice/L-57793-2040, Accept: application/xml. -->
+<html xmlns="http://www.w3.org/1999/xhtml" IdURI="https://www.thegazette.co.uk/id/notice/L-57793-2040">
+  <head>
+    <title>Winding-Up Orders</title>
+  </head>
+  <body>
+    <article class="full-notice full-notice-2452">
+      <dl class="metadata">
+        <dd data-ui-class="notice-type">Winding-Up Orders</dd>
+        <dd data-ui-class="category">Corporate Insolvency</dd>
+        <dd property="gaz:hasNoticeCode">2452</dd>
+        <dd property="gaz:hasPublicationDate"><time datetime="2005-10-21">21 October 2005</time></dd>
+        <dd property="gaz:hasNoticeID">L-57793-2040</dd>
+      </dl>
+      <div class="content" data-gazettes-type="2452">
+        <div class="rdfa-data"><time datetime="1999-01-01">hidden date</time> HIDDEN-ENRICHMENT-TEXT</div>
+        <p>Name of Company— CARILLION PLUMBING &amp; HEATING SERVICES LTD .</p>
+        <p>Company Registration Number—04980683 .</p>
+        <p>Court— High Court of Justice.</p>
+      </div>
+    </article>
+  </body>
+</html>

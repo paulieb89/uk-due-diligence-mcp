@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<!-- SYNTHETIC fixture, not a capture: the sandbox that wrote it could not reach
+     www.thegazette.co.uk. Only the notice ID, code 2443 and the 2025 date come
+     from issue #98; the company and wording are placeholders. Carries a plain
+     DOCTYPE to check that a harmless DOCTYPE is accepted.
+     Real response: GET /notice/4953471, Accept: application/xml. -->
+<html xmlns="http://www.w3.org/1999/xhtml" IdURI="https://www.thegazette.co.uk/id/notice/4953471">
+  <head>
+    <title>EXAMPLE PLACEHOLDER LIMITED</title>
+  </head>
+  <body>
+    <article class="full-notice full-notice-2443">
+      <dl class="metadata">
+        <dd data-ui-class="notice-type">Appointment of Liquidators</dd>
+        <dd data-ui-class="category">Corporate Insolvency</dd>
+        <dd property="gaz:hasNoticeCode">2443</dd>
+        <dd property="gaz:hasPublicationDate" content="2025-07-01T09:00:00"><time datetime="2025-07-01">1 July 2025</time></dd>
+        <dd property="gaz:hasNoticeID">4953471</dd>
+      </dl>
+      <div class="content" data-gazettes-type="2443">
+        <p>Company Number: <span property="gazorg:companyNumber">01234567</span></p>
+        <p>Name of Company: <span property="gazorg:name">EXAMPLE PLACEHOLDER LIMITED</span></p>
+        <div class="rdfa-data"><span property="gaz:hasPostcode">ZZ9 9ZZ</span>HIDDEN-ENRICHMENT-TEXT</div>
+        <p>Placeholder wording of a creditors' voluntary liquidation appointment.</p>
+      </div>
+    </article>
+  </body>
+</html>
