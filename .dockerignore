@@ -31,6 +31,7 @@ dashboard.json
 # no runtime module reads a repo file (sanctions.py's only open() calls are on
 # tempfile.mkstemp downloads).
 CLAUDE.md
+AGENTS.md
 LAUNCHGUIDE.md
 .github/
 .mcp.json
