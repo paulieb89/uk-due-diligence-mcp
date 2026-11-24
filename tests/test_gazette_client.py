@@ -442,6 +442,22 @@ def test_text_keeps_mixed_content_order_and_skipped_tails():
     assert result.publication_date is None
 
 
+def test_text_separates_adjacent_block_elements():
+    # Real notices (e.g. 4953471) put each line in its own <p> with no whitespace
+    # between them; the words must not run together ("00365335Name").
+    body = _xhtml(
+        '<div class="content"><p>Company Number: <span>00365335</span></p>'
+        "<p>Name of Company: WL REALISATIONS (2023) LIMITED</p>Trading<br/>Name: Wilko"
+        "<ul><li>one</li><li>two</li></ul>in<b>line</b></div>"
+    )
+    result = gazette._parse_notice("1", body, "GET /notice/1")
+
+    assert result.text == (
+        "Company Number: 00365335 Name of Company: WL REALISATIONS (2023) LIMITED "
+        "Trading Name: Wilko one two inline"
+    )
+
+
 @pytest.mark.parametrize("ctype", ["application/xml", "Application/XML; charset=utf-8", XML])
 @pytest.mark.asyncio
 async def test_application_xml_media_type_variants_are_accepted(stub, monkeypatch, ctype):

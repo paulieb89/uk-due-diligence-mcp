@@ -199,6 +199,15 @@ _LEGACY_NOTICE_ID = re.compile(r"[A-Z]-[0-9]+(?:-[0-9]+)+")
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 _X = f"{{{XHTML_NS}}}"
+# Elements whose edges separate words in the visible text.
+_BLOCK_TAGS = frozenset(
+    f"{_X}{tag}"
+    for tag in (
+        "address", "article", "blockquote", "br", "dd", "div", "dl", "dt", "h1", "h2",
+        "h3", "h4", "h5", "h6", "hr", "li", "ol", "p", "section", "table", "td", "th",
+        "tr", "ul",
+    )
+)
 # Element nesting deeper than this is refused before ElementTree builds a tree.
 # Real notices nest about 15 deep.
 NOTICE_MAX_DEPTH = 500
@@ -300,11 +309,17 @@ def _visible_text(root: ET.Element) -> str:
             continue
         if _is_rdfa_data(item):
             continue
+        if item.tag in _BLOCK_TAGS:
+            parts.append(" ")
         if item.text:
             parts.append(item.text)
         for child in reversed(list(item)):
             if child.tail:
                 stack.append(child.tail)
+            if child.tag in _BLOCK_TAGS:
+                # Notices put each line in its own <p> with nothing between them
+                # ("…00365335</p><p>Name of Company…"); a block edge is a word break.
+                stack.append(" ")
             stack.append(child)
     return " ".join("".join(parts).split())
 
