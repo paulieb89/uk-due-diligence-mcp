@@ -7,7 +7,7 @@ disable-model-invocation: true
 The procedure around the release machinery, not the machinery itself.
 `.github/workflows/release.yml` (invariants + tag check → tool-reference check
 → build → PyPI → Fly deploy) and `.claude/hooks/check_invariants.py` are the
-deterministic parts; read them and `CLAUDE.md` → Releasing rather than trusting
+deterministic parts; read them and `AGENTS.md` → Releasing rather than trusting
 a paraphrase here. A hand-run `fly deploy` is refused by
 `.claude/hooks/pre_bash_deploy.py`.
 

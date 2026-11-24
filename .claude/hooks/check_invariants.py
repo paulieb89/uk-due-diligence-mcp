@@ -6,9 +6,10 @@ agent edit. With --standalone it runs with no payload, for CI and /verify — th
 standing assertion, because the hook only sees edits made through those tools:
 a `sed -i` from Bash, a human in vim, or a merge commit all bypass it entirely.
 
-Each of these was prose in a file that did not load (AGENTS.md), which is
-how server.json drifted to 1.2.0 while the v1.3.0 release shipped. Prose an
-agent may not read is not a control; this is.
+Each of these was once only prose, in an AGENTS.md that Claude did not load at
+the time, which is how server.json drifted to 1.2.0 while the v1.3.0 release
+shipped. AGENTS.md now loads through CLAUDE.md's @AGENTS.md import, but prose
+an agent may skip is still not a control; this is.
 
 Fails OPEN on anything it cannot parse. A gate that fires when it cannot tell
 is worse than no gate — it trains you to ignore it.
@@ -115,7 +116,7 @@ def check_version_triad() -> list[str]:
     return problems + [
         "VERSION TRIAD DRIFT — these must all match:\n"
         + "\n".join(lines)
-        + "\n    A release is not done until all four agree. See CLAUDE.md > Releasing."
+        + "\n    A release is not done until all four agree. See AGENTS.md > Releasing."
     ]
 
 

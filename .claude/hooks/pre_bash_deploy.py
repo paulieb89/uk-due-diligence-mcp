@@ -59,7 +59,7 @@ FALLBACK = re.compile(r"\bfly(?:ctl)?\s+deploy\b")
 
 DENY_REASON = (
     "Hand deploys bypass the release pipeline (PyPI publish + CI provenance).\n"
-    "See CLAUDE.md > Releasing. Deliberate rollback: re-run with "
+    "See AGENTS.md > Releasing. Deliberate rollback: re-run with "
     f"{ACK_VAR}=1."
 )
 
